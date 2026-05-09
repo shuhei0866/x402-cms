@@ -32,11 +32,15 @@ data/cache.db
 build/
 *.log
 
-# Private — curator-specific judgement layer
+# Private — curator-specific judgement layer.
+# Public examples (*.example.md) are kept; everything else under prompts/ is private.
 config/tracked_handles.yaml
 config/importance_rules.yaml
-prompts/commentary_template.md
-prompts/recommendation_prompt.md
+prompts/*
+!prompts/*.example.md
+
+# Pre-commit hook private layer (Layer 1 patterns live here, gitignored)
+.git/hooks/personal-patterns.local.txt
 
 # IDE
 .vscode/

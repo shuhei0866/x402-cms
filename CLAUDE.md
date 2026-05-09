@@ -4,7 +4,7 @@
 
 This repository is a public reference implementation of an **Agent-oriented CMS** built on the x402 protocol. Intended audience:
 
-- **x402 maintainers** (phdargen, CarsonRoscoe, ethanoroshiba, etc.) reading it as a Python-side example
+- x402 maintainers and contributors reading it as a Python-side example
 - OSS contributors exploring agent-oriented content delivery patterns
 - Japanese developers in the x402 / agentic-commerce ecosystem
 
@@ -12,7 +12,7 @@ This repository is a public reference implementation of an **Agent-oriented CMS*
 
 **English-primary, Japanese parallel.**
 
-- Main docs (`README.md`, `docs/architecture.md`, future `CONTRIBUTING.md` / `CHANGELOG.md`) are written in English
+- Main docs (`README.md`, `docs/architecture.md`, `CONTRIBUTING.md`, future `CHANGELOG.md`) are written in English
 - Japanese versions live alongside as `README.ja.md`, `docs/architecture.ja.md`, etc.
 - Code comments, docstrings, commit messages, and issue / PR descriptions on this repo: **English**
 
@@ -23,10 +23,11 @@ This repository is a public reference implementation of an **Agent-oriented CMS*
 - `python/x402` (>= 2.9.0) as the payment SDK
 - `exact/evm` scheme on Base Sepolia (testnet) → Base (mainnet, Phase 5)
 - `uv` for dependency management
+- Server entrypoint: `code/server/main.py` (`create_app()` factory + lifespan)
 
 ## Architecture
 
-See `docs/architecture.md`. The core pattern: **same URL, different render based on User-Agent**. Free HTML for humans, paid JSON for agents via HTTP 402 + x402 protocol.
+See [`docs/architecture.md`](docs/architecture.md). The core pattern: **same URL, different render based on User-Agent**. Free HTML for humans, paid JSON for agents via HTTP 402 + x402 protocol.
 
 ## Phase progression
 
@@ -42,13 +43,15 @@ See `docs/architecture.md`. The core pattern: **same URL, different render based
 
 ## Public / private separation
 
-The code is public; the curator's judgement layer is private (gitignored):
+The code is public; the curator's editorial layer is private (gitignored):
 
 - `config/tracked_handles.yaml`
 - `config/importance_rules.yaml`
 - `prompts/commentary_template.md`
 - `prompts/recommendation_prompt.md`
+- `prompts/semantic_check_system.md` (the private input for the Layer 2 pre-commit guard)
+- `.git/hooks/personal-patterns.local.txt` (the private input for the Layer 1 pre-commit guard)
 - `data/source/`, `data/views/`
 - `.env`
 
-This separation keeps the architecture reproducible as an OSS reference while protecting the curator's editorial layer.
+This separation keeps the architecture reproducible as an OSS reference while protecting the curator's editorial layer. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup details.

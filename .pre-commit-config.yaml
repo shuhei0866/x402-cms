@@ -1,0 +1,15 @@
+repos:
+  - repo: local
+    hooks:
+      - id: regex-pattern-guard
+        name: Layer 1 — Regex pattern guard
+        entry: scripts/check_no_attribution.sh
+        language: script
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: llm-semantic-guard
+        name: Layer 2 — LLM semantic guard
+        entry: uv run python scripts/check_semantic.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
