@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# GCP credentials (Phase 1+ for Firestore / Cloud Run service accounts)
+gcp-key*.json
+service-account*.json
+*-credentials.json
+.gcloud/
+
+# Data (cache, regeneratable; views mirror the vault source of truth)
+data/source/
+data/views/
+data/cache.db
+
+# Build / deploy artifacts
+build/
+*.log
+
+# Private — curator-specific judgement layer
+config/tracked_handles.yaml
+config/importance_rules.yaml
+prompts/commentary_template.md
+prompts/recommendation_prompt.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
