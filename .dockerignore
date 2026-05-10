@@ -1,0 +1,52 @@
+# Python build/runtime artefacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# Local env / credentials
+.env
+.env.*
+!.env.example
+gcp-key*.json
+service-account*.json
+*-credentials.json
+.gcloud/
+
+# VCS / CI / IDE / OS
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Private curator layer (kept local; should never enter the image)
+prompts/
+config/tracked_handles.yaml
+config/importance_rules.yaml
+
+# Regenerable caches
+data/
+
+# Tooling not needed at runtime
+.pre-commit-config.yaml
+scripts/
+.claude/
+
+# Tests / fixtures
+tests/
+**/test_*.py
+
+# Docs not consumed by the runtime
+docs/
+CLAUDE.md
+README.ja.md
+CONTRIBUTING.md
