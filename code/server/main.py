@@ -40,6 +40,7 @@ from x402.schemas import Network
 from x402.server import x402ResourceServer
 
 from code.dispatch import is_agent_request
+from code.observability import access_log_middleware, configure_logging
 from code.renderers.digest import (
     DEFAULT_REPO,
     read_week,
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     facilitator's supported-schemes call is fired in the lifespan so the
     first agent request does not pay that latency.
     """
+    configure_logging()
     config = _load_config()
 
     facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=config["facilitator_url"]))
@@ -107,6 +109,7 @@ def create_app() -> FastAPI:
             await facilitator.aclose()
 
     app = FastAPI(title="x402-cms", version="0.1.0", lifespan=lifespan)
+    app.middleware("http")(access_log_middleware)
 
     @app.get("/")
     async def root() -> dict:
