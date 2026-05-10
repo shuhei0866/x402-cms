@@ -14,6 +14,7 @@ dependencies = [
     "x402[fastapi,httpx,evm]>=2.9.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
+    "google-cloud-firestore>=2.18.0",
 ]
 
 [dependency-groups]
