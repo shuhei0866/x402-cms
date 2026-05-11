@@ -60,19 +60,38 @@ class TestResolveHandleToId:
         # rejects "@" and would 404. Strip at the caller boundary.
         assert "@" not in captured["url"]
 
-    def test_404_raises_handle_not_found(self) -> None:
+    def test_user_not_found_via_200_with_errors_body(self) -> None:
+        # X API returns user-not-found as HTTP 200 with an `errors`
+        # array — the resolver must surface this as
+        # HandleNotFoundError so the orchestrator can skip past it.
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(
-                404,
+                200,
                 json={
                     "errors": [
                         {
                             "value": "doesnotexist",
                             "detail": "Could not find user with username: [doesnotexist].",
+                            "title": "Not Found Error",
+                            "resource_type": "user",
+                            "parameter": "username",
+                            "resource_id": "doesnotexist",
+                            "type": "https://api.twitter.com/2/problems/resource-not-found",
                         }
                     ]
                 },
             )
+
+        with _client(handler) as client:
+            with pytest.raises(HandleNotFoundError):
+                resolve_handle_to_id("doesnotexist", client=client, bearer=BEARER)
+
+    def test_404_status_still_raises_handle_not_found(self) -> None:
+        # Defensive: the live API returns 200+errors today, but a 404
+        # is plausible if X tightens behaviour. Keep both paths
+        # mapped to the same exception so callers do not have to care.
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json={"errors": [{"detail": "not found"}]})
 
         with _client(handler) as client:
             with pytest.raises(HandleNotFoundError):

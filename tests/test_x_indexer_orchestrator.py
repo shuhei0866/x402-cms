@@ -132,6 +132,11 @@ class TestRunForWeek:
         assert result["posts_written"] == 0
         # Firestore must not be touched in dry-run mode.
         fs_client.collection.assert_not_called()
+        # Dry-run surfaces the actual rows so callers can inspect what
+        # would have been written.
+        assert "posts" in result
+        assert len(result["posts"]) == 1
+        assert result["posts"][0]["post_id"] == "100"
 
         client.close()
 

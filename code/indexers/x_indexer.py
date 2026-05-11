@@ -31,7 +31,9 @@ X_COLLECTION = "x_posts"
 
 # Fields the indexer reads back out of each tweet row. Lock the set
 # here so the response shape and the normaliser stay in sync.
-TWEET_FIELDS = "created_at,public_metrics,conversation_id,referenced_tweets"
+# `entities` carries the expanded form of every t.co URL so we can
+# rewrite text before parsing PR references.
+TWEET_FIELDS = "created_at,public_metrics,conversation_id,referenced_tweets,entities"
 PAGE_SIZE = 100
 
 
@@ -57,6 +59,11 @@ def resolve_handle_to_id(handle: str, *, client: httpx.Client, bearer: str) -> s
     resolver does not retry: rate-limit and transport failures bubble
     out as `httpx.HTTPStatusError` / `httpx.HTTPError` so the
     orchestrator can decide backoff strategy.
+
+    Quirk: X API returns user-not-found as `200` with an `errors`
+    array (`type` ending in `resource-not-found`), not as a 404. The
+    resolver classifies both as `HandleNotFoundError` so the
+    orchestrator does not need to know which form the API used.
     """
     name = _normalise_handle(handle)
     response = client.get(
@@ -67,7 +74,35 @@ def resolve_handle_to_id(handle: str, *, client: httpx.Client, bearer: str) -> s
         raise HandleNotFoundError(name)
     response.raise_for_status()
     payload = response.json()
+
+    errors = payload.get("errors") or []
+    if errors:
+        first = errors[0]
+        err_type = first.get("type") or ""
+        if "resource-not-found" in err_type or first.get("title") == "Not Found Error":
+            raise HandleNotFoundError(name)
+        raise RuntimeError(f"X API error for handle '{name}': {first}")
+
     return str(payload["data"]["id"])
+
+
+def _expand_tco_urls(text: str, entities: dict[str, Any] | None) -> str:
+    """Replace every `t.co/...` short URL in `text` with its expansion.
+
+    X returns the wrapped form in `text` and the canonical destination
+    in `entities.urls[].expanded_url`. We swap them so downstream
+    consumers (PR-reference parser, human-rendered digest) see the
+    real target. Falls through unchanged if no entities are present.
+    """
+    if not entities:
+        return text
+    expanded = text
+    for url in entities.get("urls") or []:
+        short = url.get("url")
+        canonical = url.get("expanded_url")
+        if short and canonical:
+            expanded = expanded.replace(short, canonical)
+    return expanded
 
 
 def _to_xpost(raw: dict[str, Any], *, user_id: str, handle: str) -> XPost:
@@ -76,7 +111,7 @@ def _to_xpost(raw: dict[str, Any], *, user_id: str, handle: str) -> XPost:
     Pulls `in_reply_to_id` out of `referenced_tweets[type=replied_to].id`
     rather than the unrelated `in_reply_to_user_id` field that the API
     also surfaces. `referenced_prs` is populated at write time via the
-    shared text parser.
+    shared text parser, after t.co URLs have been expanded.
     """
     created_at = datetime.fromisoformat(raw["created_at"].replace("Z", "+00:00"))
 
@@ -91,7 +126,7 @@ def _to_xpost(raw: dict[str, Any], *, user_id: str, handle: str) -> XPost:
             in_reply_to_id = str(ref.get("id")) if ref.get("id") is not None else None
             break
 
-    text = raw["text"]
+    text = _expand_tco_urls(raw["text"], raw.get("entities"))
     return XPost(
         post_id=str(raw["id"]),
         author_handle=handle,
@@ -253,7 +288,7 @@ def run_for_week(
             all_posts, client=fs_client, project=project
         )
 
-    return {
+    result: dict[str, Any] = {
         "week": week,
         "handles_processed": processed,
         "handles_failed": len(failed_handles),
@@ -261,6 +296,11 @@ def run_for_week(
         "posts_fetched": len(all_posts),
         "posts_written": posts_written,
     }
+    if dry_run:
+        # Mirror github_indexer's dry-run: surface the actual rows so
+        # `--dry-run` is a real preview, not just a count.
+        result["posts"] = [p.model_dump(mode="json") for p in all_posts]
+    return result
 
 
 def main() -> int:

@@ -207,6 +207,81 @@ class TestFetchUserTweets:
         assert posts[0].in_reply_to_id == "150"
         assert posts[0].conversation_id == "150"
 
+    def test_tco_urls_are_expanded_before_pr_reference_parsing(self) -> None:
+        # X wraps every link in a t.co shortener and exposes the
+        # canonical destination in `entities.urls[].expanded_url`. The
+        # indexer must rewrite the text using those expansions before
+        # `parse_pr_references` runs, otherwise PR links never appear
+        # in `referenced_prs` and the join with GitHub source data is
+        # silently empty.
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "300",
+                            "text": "shipped https://t.co/ABCDE today",
+                            "created_at": "2026-05-05T12:00:00.000Z",
+                            "conversation_id": "300",
+                            "entities": {
+                                "urls": [
+                                    {
+                                        "start": 8,
+                                        "end": 28,
+                                        "url": "https://t.co/ABCDE",
+                                        "expanded_url": (
+                                            "https://github.com/"
+                                            "x402-foundation/x402/pull/2199"
+                                        ),
+                                        "display_url": (
+                                            "github.com/x402-foundation/x402/pull/2199"
+                                        ),
+                                    }
+                                ]
+                            },
+                        }
+                    ],
+                    "meta": {"result_count": 1},
+                },
+            )
+
+        with _client(handler) as client:
+            posts = fetch_user_tweets(
+                user_id="1",
+                handle="x",
+                start=START,
+                end=END,
+                client=client,
+                bearer=BEARER,
+            )
+
+        assert posts[0].referenced_prs == ["x402-foundation/x402#2199"]
+        # The stored text shows the expanded URL too — the digest
+        # renders the canonical destination, not the t.co shortener.
+        assert "https://github.com/x402-foundation/x402/pull/2199" in posts[0].text
+        assert "t.co/ABCDE" not in posts[0].text
+
+    def test_entities_field_is_requested(self) -> None:
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["params"] = dict(request.url.params)
+            return httpx.Response(200, json={"meta": {"result_count": 0}})
+
+        with _client(handler) as client:
+            fetch_user_tweets(
+                user_id="1",
+                handle="x",
+                start=START,
+                end=END,
+                client=client,
+                bearer=BEARER,
+            )
+
+        fields = captured["params"]["tweet.fields"].split(",")
+        assert "entities" in fields
+
     def test_missing_public_metrics_is_tolerated(self) -> None:
         # Under load X has been observed returning data rows without
         # public_metrics. The indexer must still emit the XPost row
