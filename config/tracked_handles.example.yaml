@@ -1,0 +1,13 @@
+# Tracked X (Twitter) handles for the weekly digest.
+#
+# The real file `config/tracked_handles.yaml` is gitignored — it's a
+# curation choice, not OSS surface. This `.example.yaml` ships in the
+# repo so a fresh clone has a working template.
+#
+# Format: a flat YAML list. Entries may include or omit the leading
+# '@'; the indexer strips it. Blank lines and YAML comments are
+# ignored.
+
+- phdargen          # CDP AgentKit / x402-foundation Python SDK
+- CarsonRoscoe      # x402-foundation DX / release captain
+- ethanoroshiba     # Bazaar protocol

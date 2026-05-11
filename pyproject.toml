@@ -15,6 +15,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
     "google-cloud-firestore>=2.18.0",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
@@ -34,3 +35,8 @@ packages = ["code"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+pythonpath = ["."]
