@@ -45,13 +45,3 @@ class XPost(BaseModel):
     conversation_id: str | None = None
     referenced_prs: list[str] = Field(default_factory=list)
     metrics: XPostMetrics | None = None
-
-
-def week_of(created_at: datetime) -> str:
-    """Return the ISO week label (`YYYY-Www`) for a tweet's `created_at`.
-
-    Pure on the input — no `today()` reference — so the bucket label
-    stays stable when the indexer re-runs the same window.
-    """
-    iso_year, iso_week, _ = created_at.isocalendar()
-    return f"{iso_year:04d}-W{iso_week:02d}"

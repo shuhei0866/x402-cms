@@ -22,9 +22,9 @@ import httpx
 import yaml
 from google.cloud import firestore
 
-from code.indexers.github_indexer import parse_iso_week, previous_iso_week
 from code.indexers.x_text_parser import parse_pr_references
-from code.schemas.x_post import XPost, XPostMetrics, week_of
+from code.schemas.x_post import XPost, XPostMetrics
+from code.utils.dates import parse_iso_week, previous_iso_week, week_of
 
 X_API_BASE = os.getenv("X_API_BASE", "https://api.x.com")
 X_COLLECTION = "x_posts"

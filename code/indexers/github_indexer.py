@@ -33,36 +33,12 @@ import httpx
 from google.cloud import firestore
 
 from code.schemas.pr import MergedPR
+from code.utils.dates import parse_iso_week, previous_iso_week
 
 DEFAULT_REPO = "x402-foundation/x402"
 COLLECTION = "source_data"
 SEARCH_URL = "https://api.github.com/search/issues"
 SEARCH_PAGE_SIZE = 100  # GitHub Search API per-page maximum.
-
-
-def parse_iso_week(week: str) -> tuple[date, date]:
-    """Return [start, end) date bounds for an ISO week label like '2026-W19'.
-
-    Start is the Monday of that ISO week; end is the following Monday
-    (exclusive), so callers can build search ranges with `end - 1 day`
-    as the inclusive upper bound.
-    """
-    year_str, week_str = week.split("-W")
-    start = date.fromisocalendar(int(year_str), int(week_str), 1)
-    end = start + timedelta(days=7)
-    return start, end
-
-
-def previous_iso_week(today: date | None = None) -> str:
-    """Return the ISO week label for the week ending most recently.
-
-    `today - 7 days` lands inside the previous ISO week regardless of
-    which weekday `today` is, so a Monday-morning run picks last week
-    and a mid-week manual run picks the same calendar week as last week.
-    """
-    anchor = (today or date.today()) - timedelta(days=7)
-    iso_year, iso_week, _ = anchor.isocalendar()
-    return f"{iso_year:04d}-W{iso_week:02d}"
 
 
 def fetch_merged_prs(

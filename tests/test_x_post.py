@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from code.schemas.x_post import XPost, XPostMetrics, week_of
+from code.schemas.x_post import XPost, XPostMetrics
 
 
 def _fixture_post(**overrides) -> XPost:
@@ -100,23 +100,3 @@ class TestXPostMetrics:
         assert m.retweet_count == 0
 
 
-class TestWeekOf:
-    """`week_of` derives the ISO week label from a tweet `created_at`.
-
-    The indexer uses it so the bucket on every post stays consistent
-    with `previous_iso_week()` and the renderer's `read_week` index.
-    """
-
-    def test_monday_start(self) -> None:
-        assert week_of(datetime(2026, 5, 4, 0, 0, tzinfo=timezone.utc)) == "2026-W19"
-
-    def test_sunday_end(self) -> None:
-        assert week_of(datetime(2026, 5, 10, 23, 59, tzinfo=timezone.utc)) == "2026-W19"
-
-    def test_next_monday_rolls_over(self) -> None:
-        assert week_of(datetime(2026, 5, 11, 0, 0, tzinfo=timezone.utc)) == "2026-W20"
-
-    def test_year_boundary_iso_week_53(self) -> None:
-        # 2026-01-01 is a Thursday — its ISO week is 2026-W01.
-        # 2025-12-29 (Monday) is the start of 2026-W01 in ISO terms.
-        assert week_of(datetime(2025, 12, 29, 0, 0, tzinfo=timezone.utc)) == "2026-W01"

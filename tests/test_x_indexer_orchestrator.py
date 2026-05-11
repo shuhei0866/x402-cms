@@ -9,18 +9,13 @@ discipline and never touches the real X API.
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-from code.indexers.x_indexer import (
-    HandleNotFoundError,
-    load_tracked_handles,
-    run_for_week,
-)
+from code.indexers.x_indexer import load_tracked_handles, run_for_week
 
 
 def _tweet_row(post_id: str, created_at: str) -> dict:
