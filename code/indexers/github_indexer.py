@@ -1,16 +1,24 @@
 """GitHub indexer — fetch merged PRs from tracked x402 repositories.
 
 Phase 1 / M1.2 scope: fetch merged pull requests from
-`x402-foundation/x402` within an ISO-week window via the `gh` CLI and
-write them to the Firestore `source_data` collection.
+`x402-foundation/x402` within an ISO-week window via the GitHub
+Search API and write them to the Firestore `source_data` collection.
 
 Run with:
 
     uv run python -m code.indexers.github_indexer --week 2026-W19
 
+`--week` is optional; without it the indexer targets the previous ISO
+week (today - 7 days), which is what a Monday-morning Cloud Scheduler
+run wants — index the week that just ended.
+
 Idempotent: re-running for the same week overwrites existing documents
 in place. The document ID is `{repo_safe}_{pr_number}` where
 `repo_safe` replaces `/` with `__` so it is a valid Firestore key.
+
+The Search API is called unauthenticated by default (10 req/min, ample
+for a weekly run). Set `GITHUB_TOKEN` or `GH_TOKEN` for the 30 req/min
+authenticated quota and to lift the 1000-result cap.
 """
 
 from __future__ import annotations
@@ -18,25 +26,26 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from datetime import date, datetime, timedelta
 
+import httpx
 from google.cloud import firestore
 
 from code.schemas.pr import MergedPR
 
 DEFAULT_REPO = "x402-foundation/x402"
 COLLECTION = "source_data"
-GH_FETCH_LIMIT = 200
+SEARCH_URL = "https://api.github.com/search/issues"
+SEARCH_PAGE_SIZE = 100  # GitHub Search API per-page maximum.
 
 
 def parse_iso_week(week: str) -> tuple[date, date]:
     """Return [start, end) date bounds for an ISO week label like '2026-W19'.
 
     Start is the Monday of that ISO week; end is the following Monday
-    (exclusive), so callers can build `gh` search ranges with
-    `end - 1 day` as the inclusive upper bound.
+    (exclusive), so callers can build search ranges with `end - 1 day`
+    as the inclusive upper bound.
     """
     year_str, week_str = week.split("-W")
     start = date.fromisocalendar(int(year_str), int(week_str), 1)
@@ -44,36 +53,76 @@ def parse_iso_week(week: str) -> tuple[date, date]:
     return start, end
 
 
-def fetch_merged_prs(repo: str, start: date, end: date) -> list[MergedPR]:
-    """Fetch merged PRs in [start, end) using the `gh` CLI.
+def previous_iso_week(today: date | None = None) -> str:
+    """Return the ISO week label for the week ending most recently.
+
+    `today - 7 days` lands inside the previous ISO week regardless of
+    which weekday `today` is, so a Monday-morning run picks last week
+    and a mid-week manual run picks the same calendar week as last week.
+    """
+    anchor = (today or date.today()) - timedelta(days=7)
+    iso_year, iso_week, _ = anchor.isocalendar()
+    return f"{iso_year:04d}-W{iso_week:02d}"
+
+
+def fetch_merged_prs(
+    repo: str,
+    start: date,
+    end: date,
+    http_client: httpx.Client | None = None,
+) -> list[MergedPR]:
+    """Fetch merged PRs in [start, end) via the GitHub Search API.
 
     Uses the `merged:YYYY-MM-DD..YYYY-MM-DD` qualifier with an inclusive
-    upper bound (`end - 1 day`).
+    upper bound (`end - 1 day`). Auth optional via `GITHUB_TOKEN` /
+    `GH_TOKEN`. Caps at one page of `SEARCH_PAGE_SIZE` results and
+    emits a stderr warning if the window has more.
     """
     inclusive_end = end - timedelta(days=1)
-    search = f"merged:{start.isoformat()}..{inclusive_end.isoformat()}"
+    query = (
+        f"repo:{repo} is:pr is:merged "
+        f"merged:{start.isoformat()}..{inclusive_end.isoformat()}"
+    )
 
-    cmd = [
-        "gh",
-        "pr",
-        "list",
-        "-R",
-        repo,
-        "--state",
-        "merged",
-        "--search",
-        search,
-        "--json",
-        "number,title,mergedAt,author,labels,url",
-        "--limit",
-        str(GH_FETCH_LIMIT),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    raw = json.loads(result.stdout)
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "x402-cms-indexer",
+    }
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    owns_client = http_client is None
+    client = http_client or httpx.Client(timeout=30.0)
+    try:
+        response = client.get(
+            SEARCH_URL,
+            params={"q": query, "per_page": SEARCH_PAGE_SIZE, "page": 1},
+            headers=headers,
+        )
+        response.raise_for_status()
+        data = response.json()
+    finally:
+        if owns_client:
+            client.close()
+
+    total = data.get("total_count", 0)
+    if total > SEARCH_PAGE_SIZE:
+        print(
+            f"WARNING: {total} merged PRs match the window but only the "
+            f"first {SEARCH_PAGE_SIZE} are indexed; bump pagination if "
+            f"weekly volume sustains this level.",
+            file=sys.stderr,
+        )
 
     prs: list[MergedPR] = []
-    for item in raw:
-        merged_at = datetime.fromisoformat(item["mergedAt"].replace("Z", "+00:00"))
+    for item in data.get("items", []):
+        pr_block = item.get("pull_request") or {}
+        merged_at_str = pr_block.get("merged_at")
+        if not merged_at_str:
+            continue
+        merged_at = datetime.fromisoformat(merged_at_str.replace("Z", "+00:00"))
         iso_year, iso_week, _ = merged_at.date().isocalendar()
         prs.append(
             MergedPR(
@@ -81,9 +130,9 @@ def fetch_merged_prs(repo: str, start: date, end: date) -> list[MergedPR]:
                 pr_number=item["number"],
                 title=item["title"],
                 merged_at=merged_at,
-                author=item["author"]["login"],
+                author=item["user"]["login"],
                 labels=[label["name"] for label in (item.get("labels") or [])],
-                url=item["url"],
+                url=item["html_url"],
                 week=f"{iso_year:04d}-W{iso_week:02d}",
             )
         )
@@ -111,8 +160,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--week",
-        required=True,
-        help="ISO week label, e.g. '2026-W19'.",
+        default=None,
+        help=(
+            "ISO week label, e.g. '2026-W19'. Defaults to the ISO week "
+            "of (today - 7 days), i.e. the previous week."
+        ),
     )
     parser.add_argument(
         "--repo",
@@ -126,10 +178,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    start, end = parse_iso_week(args.week)
+    week = args.week or previous_iso_week()
+    start, end = parse_iso_week(week)
     inclusive_end = end - timedelta(days=1)
     print(
-        f"Fetching merged PRs from {args.repo} for {args.week} "
+        f"Fetching merged PRs from {args.repo} for {week} "
         f"({start.isoformat()}..{inclusive_end.isoformat()})",
         file=sys.stderr,
     )
