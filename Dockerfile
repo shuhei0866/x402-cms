@@ -24,6 +24,11 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 COPY code ./code
+# `config/tracked_handles.yaml` and `config/importance_rules.yaml`
+# are excluded by .dockerignore — only the `.example.yaml` template
+# rides in. The x_indexer job is started with
+# `--handles-config config/tracked_handles.example.yaml`.
+COPY config ./config
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8080
