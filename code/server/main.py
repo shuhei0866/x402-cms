@@ -43,7 +43,7 @@ from code.dispatch import is_agent_request
 from code.observability import access_log_middleware, configure_logging
 from code.renderers.digest import (
     DEFAULT_REPO,
-    read_week,
+    load_digest_bundle,
     render_agent_payload,
     render_html,
 )
@@ -140,8 +140,10 @@ def create_app() -> FastAPI:
         the User-Agent header.
         """
         if not is_agent_request(request.headers):
-            prs = read_week(week, project=config["gcp_project"])
-            return HTMLResponse(render_html(prs, week, DEFAULT_REPO))
+            bundle = load_digest_bundle(
+                week, repo=DEFAULT_REPO, project=config["gcp_project"]
+            )
+            return HTMLResponse(render_html(bundle))
 
         adapter = FastAPIAdapter(request)
         context = HTTPRequestContext(
@@ -169,16 +171,20 @@ def create_app() -> FastAPI:
             # Defensive: the digest route is registered with payment
             # requirements, so this branch should not normally fire.
             # Serve the free JSON rather than block the caller.
-            prs = read_week(week, project=config["gcp_project"])
-            return JSONResponse(content=render_agent_payload(prs, week, DEFAULT_REPO))
+            bundle = load_digest_bundle(
+                week, repo=DEFAULT_REPO, project=config["gcp_project"]
+            )
+            return JSONResponse(content=render_agent_payload(bundle))
 
         # payment-verified: render, then settle on the facilitator and
         # attach settlement headers to the response.
         assert result.payment_payload is not None
         assert result.payment_requirements is not None
 
-        prs = read_week(week, project=config["gcp_project"])
-        payload = render_agent_payload(prs, week, DEFAULT_REPO)
+        bundle = load_digest_bundle(
+            week, repo=DEFAULT_REPO, project=config["gcp_project"]
+        )
+        payload = render_agent_payload(bundle)
 
         settle_result = await http_server.process_settlement(
             result.payment_payload,
