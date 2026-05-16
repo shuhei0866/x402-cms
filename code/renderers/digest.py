@@ -10,15 +10,18 @@ two views never drift in what counts as "this week's PRs".
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from html import escape
 
 from google.cloud import firestore
 
+from code.schemas.commentary import Commentary
 from code.schemas.pr import MergedPR
 from code.schemas.x_post import XPost
 
 COLLECTION = "source_data"
 X_COLLECTION = "x_posts"
+COMMENTARY_COLLECTION = "commentary"
 DEFAULT_REPO = "x402-foundation/x402"
 
 
@@ -75,6 +78,48 @@ def read_x_posts_for_week(
     posts = [XPost.model_validate(doc.to_dict()) for doc in docs]
     posts.sort(key=lambda p: p.created_at, reverse=True)
     return posts
+
+
+def read_commentary_for_week(
+    week: str,
+    project: str | None = None,
+    *,
+    client: firestore.Client | None = None,
+) -> list[Commentary]:
+    """Load commentary for a given ISO week from Firestore.
+
+    Same shape as the other readers. The publish path only ever puts
+    published commentary in the collection (unpublish/delete remove the
+    doc), so everything read here is live. Sorted newest-first on
+    `published_at`; a missing timestamp sorts last.
+    """
+    fs = _build_client(client, project)
+    docs = (
+        fs.collection(COMMENTARY_COLLECTION)
+        .where(filter=firestore.FieldFilter("week", "==", week))
+        .stream()
+    )
+    commentaries = [Commentary.model_validate(doc.to_dict()) for doc in docs]
+    # `published_at` is always stamped by the publish path, but guard a
+    # missing one with a min-sentinel so the sort never compares None.
+    _floor = datetime.min.replace(tzinfo=timezone.utc)
+    commentaries.sort(
+        key=lambda c: c.published_at or _floor,
+        reverse=True,
+    )
+    return commentaries
+
+
+def derive_recommendations(commentaries: list[Commentary]) -> list[Commentary]:
+    """The ranked picks, derived (not a separate collection).
+
+    Keeps only commentary with a `recommended_rank`, ordered 1→2→3.
+    Rank uniqueness within a week is a publish-time invariant, so the
+    sort is total here.
+    """
+    ranked = [c for c in commentaries if c.recommended_rank is not None]
+    ranked.sort(key=lambda c: c.recommended_rank)  # type: ignore[arg-type,return-value]
+    return ranked
 
 
 def _pr_ref(pr: MergedPR) -> str:
@@ -139,6 +184,7 @@ class DigestBundle:
     prs: list[MergedPR]
     x_posts: list[XPost]
     cross_references: list[CrossReference]
+    commentaries: list[Commentary] = field(default_factory=list)
 
 
 def load_digest_bundle(
@@ -158,6 +204,7 @@ def load_digest_bundle(
     fs = _build_client(client, project)
     prs = read_week(week, client=fs)
     x_posts = read_x_posts_for_week(week, client=fs)
+    commentaries = read_commentary_for_week(week, client=fs)
     cross_references = build_cross_references(prs, x_posts)
     return DigestBundle(
         week=week,
@@ -165,6 +212,7 @@ def load_digest_bundle(
         prs=prs,
         x_posts=x_posts,
         cross_references=cross_references,
+        commentaries=commentaries,
     )
 
 
@@ -238,10 +286,12 @@ def _html_cross_item(cr: CrossReference) -> str:
 def render_agent_payload(bundle: DigestBundle) -> dict:
     """Render the agent-facing JSON payload for a digest week.
 
-    Three top-level lists: `merged_prs`, `x_posts`, `cross_references`.
-    The cross-references carry x_post ids rather than full post bodies
-    so the payload stays small; the agent joins back to `x_posts` by
-    id (normalised, not denormalised).
+    `merged_prs` / `x_posts` / `commentary` are full rows; the agent
+    paid for the interpretation so `commentary` ships the raw
+    `body_md`. `cross_references` and `agent_recommendations` are
+    normalised reference lists (ids / slugs) that the agent joins back
+    to the full lists — the payload stays small even when the same
+    note is both a pick and a body.
     """
     return {
         "week": bundle.week,
@@ -252,5 +302,14 @@ def render_agent_payload(bundle: DigestBundle) -> dict:
         "cross_references": [
             {"pr_ref": cr.pr_ref, "x_post_ids": cr.x_post_ids}
             for cr in bundle.cross_references
+        ],
+        "commentary": [c.model_dump(mode="json") for c in bundle.commentaries],
+        "agent_recommendations": [
+            {
+                "slug": c.slug,
+                "recommended_rank": c.recommended_rank,
+                "tldr": c.tldr,
+            }
+            for c in derive_recommendations(bundle.commentaries)
         ],
     }

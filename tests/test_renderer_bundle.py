@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 
 from code.renderers.digest import (
     COLLECTION,
+    COMMENTARY_COLLECTION,
     X_COLLECTION,
     CrossReference,
     DigestBundle,
@@ -68,9 +69,12 @@ def _docs(payloads: list[dict]) -> list[MagicMock]:
 def _client_with_two_collections(
     pr_payloads: list[dict],
     x_post_payloads: list[dict],
+    commentary_payloads: list[dict] | None = None,
 ) -> MagicMock:
     """A MagicMock firestore client whose `.collection(name)` routes to
-    the right docs depending on which collection the reader queries."""
+    the right docs depending on which collection the reader queries.
+    `load_digest_bundle` now reads three collections; commentary
+    defaults to empty so the existing PR/X assertions stay focused."""
     client = MagicMock()
 
     pr_coll = MagicMock()
@@ -79,11 +83,18 @@ def _client_with_two_collections(
     x_coll = MagicMock()
     x_coll.where.return_value.stream.return_value = iter(_docs(x_post_payloads))
 
+    c_coll = MagicMock()
+    c_coll.where.return_value.stream.return_value = iter(
+        _docs(commentary_payloads or [])
+    )
+
     def route(name: str) -> MagicMock:
         if name == COLLECTION:
             return pr_coll
         if name == X_COLLECTION:
             return x_coll
+        if name == COMMENTARY_COLLECTION:
+            return c_coll
         raise AssertionError(f"unexpected collection name: {name}")
 
     client.collection.side_effect = route
