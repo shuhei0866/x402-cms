@@ -13,6 +13,10 @@ differs (temporarily pull vs. retract), which matters for the log.
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +25,11 @@ from google.cloud import firestore
 from code.publish.vault_parser import parse_vault_file
 
 COMMENTARY_COLLECTION = "commentary"
+
+DEFAULT_VAULT_DIR = (
+    Path.home()
+    / "Documents/life_value_lab/personal_works/my_vault/x402_digest/views"
+)
 
 
 class PublishError(Exception):
@@ -103,3 +112,53 @@ def _summary_key(action: str) -> str:
         "unpublish": "unpublished",
         "delete": "deleted",
     }[action]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Publish vault commentary to the Firestore commentary collection.",
+    )
+    parser.add_argument(
+        "--vault-dir",
+        default=str(DEFAULT_VAULT_DIR),
+        help=f"Directory of commentary .md files (default: {DEFAULT_VAULT_DIR}).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would change without writing to Firestore.",
+    )
+    args = parser.parse_args()
+
+    vault_dir = Path(args.vault_dir)
+    if not vault_dir.exists():
+        print(
+            f"Vault dir {vault_dir} does not exist yet; nothing to publish.",
+            file=sys.stderr,
+        )
+        print(json.dumps({"published": 0, "unpublished": 0, "deleted": 0}))
+        return 0
+
+    project = os.getenv("GOOGLE_CLOUD_PROJECT")
+    print(
+        f"Publishing from {vault_dir} "
+        f"(project: {project or 'ADC default'}, dry_run={args.dry_run}).",
+        file=sys.stderr,
+    )
+
+    try:
+        result = publish_vault_dir(
+            vault_dir, project=project, dry_run=args.dry_run
+        )
+    except Exception as exc:
+        # CLI boundary: a parse/validation/rank-collision failure
+        # should print one clean line and exit 1, not dump a traceback.
+        print(f"Publish failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
