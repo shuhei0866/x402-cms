@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -54,19 +55,36 @@ DIGEST_ROUTE_PATTERN = "GET /digest/*"
 DEFAULT_HANDLES_CONFIG_PATH = "/secrets/tracked_handles.yaml"
 
 
-def _load_config() -> dict[str, str | None]:
+@dataclass(frozen=True)
+class ServerConfig:
+    """Server-side env-derived config.
+
+    `evm_address` is required and validated at load time so its type
+    is a plain `str` — the handler can pass it to x402 without a
+    cast. `gcp_project` is optional (falls back to ADC default).
+    """
+
+    evm_address: str
+    facilitator_url: str
+    gcp_project: str | None
+    handles_config_path: str
+
+
+def _load_config() -> ServerConfig:
     load_dotenv()
     evm_address = os.getenv("EVM_ADDRESS")
     if not evm_address:
         raise ValueError("EVM_ADDRESS is required in .env")
-    return {
-        "evm_address": evm_address,
-        "facilitator_url": os.getenv("FACILITATOR_URL", "https://x402.org/facilitator"),
-        "gcp_project": os.getenv("GOOGLE_CLOUD_PROJECT"),
-        "handles_config_path": os.getenv(
+    return ServerConfig(
+        evm_address=evm_address,
+        facilitator_url=os.getenv(
+            "FACILITATOR_URL", "https://x402.org/facilitator"
+        ),
+        gcp_project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+        handles_config_path=os.getenv(
             "HANDLES_CONFIG_PATH", DEFAULT_HANDLES_CONFIG_PATH
         ),
-    }
+    )
 
 
 def _load_handle_clusters_safely(path: str) -> dict[str, str]:
@@ -97,9 +115,9 @@ def create_app() -> FastAPI:
     # Cluster map is read once at startup — curation is a deploy-time
     # input, not a per-request lookup, so a single load is enough and
     # avoids hitting the mounted file on every digest request.
-    handle_clusters = _load_handle_clusters_safely(config["handles_config_path"])
+    handle_clusters = _load_handle_clusters_safely(config.handles_config_path)
 
-    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=config["facilitator_url"]))
+    facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=config.facilitator_url))
     server = x402ResourceServer(facilitator)
     server.register(EVM_NETWORK, ExactEvmServerScheme())
 
@@ -108,7 +126,7 @@ def create_app() -> FastAPI:
             accepts=[
                 PaymentOption(
                     scheme="exact",
-                    pay_to=config["evm_address"],
+                    pay_to=config.evm_address,
                     price="$0.05",
                     network=EVM_NETWORK,
                 ),
@@ -167,7 +185,7 @@ def create_app() -> FastAPI:
             bundle = load_digest_bundle(
                 week,
                 repo=DEFAULT_REPO,
-                project=config["gcp_project"],
+                project=config.gcp_project,
                 handle_clusters=handle_clusters,
             )
             return HTMLResponse(render_html(bundle))
@@ -201,7 +219,7 @@ def create_app() -> FastAPI:
             bundle = load_digest_bundle(
                 week,
                 repo=DEFAULT_REPO,
-                project=config["gcp_project"],
+                project=config.gcp_project,
                 handle_clusters=handle_clusters,
             )
             return JSONResponse(content=render_agent_payload(bundle))
@@ -214,7 +232,7 @@ def create_app() -> FastAPI:
         bundle = load_digest_bundle(
             week,
             repo=DEFAULT_REPO,
-            project=config["gcp_project"],
+            project=config.gcp_project,
             handle_clusters=handle_clusters,
         )
         payload = render_agent_payload(bundle)
