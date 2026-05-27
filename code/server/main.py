@@ -40,6 +40,7 @@ from x402.schemas import Network
 from x402.server import x402ResourceServer
 
 from code.dispatch import is_agent_request
+from code.indexers.x_indexer import load_handle_clusters
 from code.observability import access_log_middleware, configure_logging
 from code.renderers.digest import (
     DEFAULT_REPO,
@@ -50,6 +51,7 @@ from code.renderers.digest import (
 
 EVM_NETWORK: Network = "eip155:84532"  # Base Sepolia
 DIGEST_ROUTE_PATTERN = "GET /digest/*"
+DEFAULT_HANDLES_CONFIG_PATH = "/secrets/tracked_handles.yaml"
 
 
 def _load_config() -> dict[str, str | None]:
@@ -61,7 +63,25 @@ def _load_config() -> dict[str, str | None]:
         "evm_address": evm_address,
         "facilitator_url": os.getenv("FACILITATOR_URL", "https://x402.org/facilitator"),
         "gcp_project": os.getenv("GOOGLE_CLOUD_PROJECT"),
+        "handles_config_path": os.getenv(
+            "HANDLES_CONFIG_PATH", DEFAULT_HANDLES_CONFIG_PATH
+        ),
     }
+
+
+def _load_handle_clusters_safely(path: str) -> dict[str, str]:
+    """Load the curated handle → cluster map; tolerate a missing file.
+
+    In production the Cloud Run Service mounts the secret at this
+    path; in local dev the file may not exist (developer is iterating
+    on the renderer, not on curation). An empty map degrades the
+    renderer gracefully (the Japan section just shows the empty
+    state), so a missing file is logged but does not block startup.
+    """
+    try:
+        return load_handle_clusters(path)
+    except FileNotFoundError:
+        return {}
 
 
 def create_app() -> FastAPI:
@@ -74,6 +94,10 @@ def create_app() -> FastAPI:
     """
     configure_logging()
     config = _load_config()
+    # Cluster map is read once at startup — curation is a deploy-time
+    # input, not a per-request lookup, so a single load is enough and
+    # avoids hitting the mounted file on every digest request.
+    handle_clusters = _load_handle_clusters_safely(config["handles_config_path"])
 
     facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=config["facilitator_url"]))
     server = x402ResourceServer(facilitator)
@@ -141,7 +165,10 @@ def create_app() -> FastAPI:
         """
         if not is_agent_request(request.headers):
             bundle = load_digest_bundle(
-                week, repo=DEFAULT_REPO, project=config["gcp_project"]
+                week,
+                repo=DEFAULT_REPO,
+                project=config["gcp_project"],
+                handle_clusters=handle_clusters,
             )
             return HTMLResponse(render_html(bundle))
 
@@ -172,7 +199,10 @@ def create_app() -> FastAPI:
             # requirements, so this branch should not normally fire.
             # Serve the free JSON rather than block the caller.
             bundle = load_digest_bundle(
-                week, repo=DEFAULT_REPO, project=config["gcp_project"]
+                week,
+                repo=DEFAULT_REPO,
+                project=config["gcp_project"],
+                handle_clusters=handle_clusters,
             )
             return JSONResponse(content=render_agent_payload(bundle))
 
@@ -182,7 +212,10 @@ def create_app() -> FastAPI:
         assert result.payment_requirements is not None
 
         bundle = load_digest_bundle(
-            week, repo=DEFAULT_REPO, project=config["gcp_project"]
+            week,
+            repo=DEFAULT_REPO,
+            project=config["gcp_project"],
+            handle_clusters=handle_clusters,
         )
         payload = render_agent_payload(bundle)
 
