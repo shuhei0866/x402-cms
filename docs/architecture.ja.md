@@ -1,189 +1,354 @@
 # x402-cms アーキテクチャ
 
-`x402-cms` は **Agent-oriented CMS** の reference 実装。同じ URL で User-Agent によって render を分岐させる。人間（browser）は無料 HTML、AI エージェントは HTTP 402 → x402 payment → JSON、という構造。
+`x402-cms` は **Agent-oriented CMS** のリファレンス実装である。同じ URL で
+リクエスタに応じて 2 種類のレンダリングを返す: 人間 (ブラウザ) には無料
+HTML、AI agent には HTTP 402 + x402 プロトコル経由で有料 JSON。
 
 [English](architecture.md)
 
-## 1. システム全体像（target state）
+Phase 0〜4 が本番稼働中。Phase 5 (mainnet 化 + batch-settlement scheme への
+切替) はロードマップに残っている。現状の決済は **Base Sepolia testnet の
+USDC** を `x402.org/facilitator` 経由で扱う。
 
-Phase 1 以降を含む全体像。Phase 0 では `JSONRenderer` と `Facilitator` の往復だけが動く。
+## 1. システム全体像
 
 ```mermaid
 graph TB
-  subgraph "Buyer Side"
-    Human["人間（browser）"]
-    Agent["AI エージェント（Claude Code / MCP client）"]
+  subgraph Buyer["Buyer 側"]
+    Human["人間 (ブラウザ)"]
+    Agent["AI agent<br/>(MCP / dogfood script)"]
   end
 
-  subgraph "x402-cms（Cloud Run service）"
-    Router{"User-Agent 判定"}
-    HTMLRenderer["HTML renderer<br/>vault 文体の narrative"]
-    JSONRenderer["JSON renderer<br/>+ x402 payment middleware"]
-    Router -->|"browser"| HTMLRenderer
-    Router -->|"agent"| JSONRenderer
+  subgraph Service["Cloud Run Service: x402-cms"]
+    Dispatch{"User-Agent<br/>dispatch"}
+    Bundle["load_digest_bundle"]
+    HTML["render_html"]
+    JSON["render_agent_payload<br/>+ x402 payment gate"]
+    Dispatch -->|"browser"| Bundle
+    Dispatch -->|"agent"| Bundle
+    Bundle --> HTML
+    Bundle --> JSON
   end
 
-  subgraph "Data Layer（GCP）"
-    Firestore[("Firestore")]
-    SourceCol["source_data collection"]
-    ViewsCol["views collection"]
-    DigestsCol["digests cache collection"]
-    Firestore --- SourceCol
-    Firestore --- ViewsCol
-    Firestore --- DigestsCol
+  subgraph FS["Firestore (renderer の唯一の read 面)"]
+    SrcCol["source_data<br/>(merged PRs)"]
+    XCol["x_posts<br/>(tweets)"]
+    CommCol["commentary<br/>(Shuhei の解釈)"]
   end
 
-  subgraph "Indexers（Cloud Scheduler + Cloud Run jobs）"
-    GHIndexer["github_indexer<br/>gh CLI で PR/issue/commit を fetch"]
-    XIndexer["x_indexer<br/>xurl で X posts を fetch"]
+  subgraph Jobs["Cloud Run Jobs (週次・月 09:00 JST)"]
+    GHJob["x402-cms-indexer<br/>httpx + GitHub Search"]
+    XJob["x402-cms-x-indexer<br/>httpx + X API v2"]
   end
 
-  subgraph "Content Source（vault が source of truth）"
-    Vault["Obsidian Vault<br/>x402_digest/views/*.md<br/>frontmatter: published bool"]
-    PublishScript["publish_views.py"]
+  subgraph Skills["Claude Code skills (手動)"]
+    Reindex["/x402-reindex"]
+    Survey["/x402-survey"]
+    Publish["/x402-publish"]
   end
 
-  subgraph "Off-chain Services"
+  subgraph Vault["Obsidian Vault (private repo)"]
+    VaultDir["x402_digest/views/<br/>YYYY-Www-slug.md"]
+  end
+
+  subgraph Sec["Secret Manager"]
+    Bearer["x402-cms-x-bearer"]
+    Handles["x402-cms-tracked-handles<br/>(curated handles + clusters)"]
+  end
+
+  subgraph Off["Off-chain"]
     GitHub[("GitHub<br/>x402-foundation/x402")]
-    XAPI[("X API<br/>via xurl")]
+    XAPI[("X API v2")]
   end
 
-  subgraph "On-chain"
-    Facilitator["x402.org/facilitator<br/>verify + settle"]
-    BaseSepolia[("Base Sepolia / Base<br/>USDC")]
+  subgraph On["On-chain (Base Sepolia)"]
+    Fac["x402.org/facilitator"]
+    USDC[("USDC")]
   end
 
-  Human --> Router
-  Agent --> Router
+  Human --> Dispatch
+  Agent --> Dispatch
 
-  HTMLRenderer --> Firestore
-  JSONRenderer --> Firestore
-  JSONRenderer -.->|"verify/settle"| Facilitator
-  Facilitator --> BaseSepolia
+  Bundle --> SrcCol
+  Bundle --> XCol
+  Bundle --> CommCol
+  Handles -.->|"file mount"| Service
 
-  GHIndexer --> GitHub
-  XIndexer --> XAPI
-  GHIndexer --> SourceCol
-  XIndexer --> SourceCol
+  GHJob --> GitHub
+  GHJob --> SrcCol
+  XJob --> XAPI
+  XJob --> XCol
+  Bearer -.->|"env var"| XJob
+  Handles -.->|"file mount"| XJob
 
-  Vault --> PublishScript
-  PublishScript --> ViewsCol
+  Reindex -.->|"trigger"| GHJob
+  Reindex -.->|"trigger"| XJob
+  Survey -.->|"read-only"| FS
+  VaultDir -->|"manual"| Publish
+  Publish --> CommCol
+
+  JSON -.->|"verify + settle"| Fac
+  Fac --> USDC
 ```
 
-## 2. リクエストシーケンス（人間 vs エージェント）
+設計上の要点:
 
-同じ URL に対する 2 種類の挙動を時系列で示す。
+- **同じ URL を User-Agent で振り分け**。`code/dispatch.py` がブラウザ
+  marker (Mozilla / Chrome / Safari / …) を小さなホワイトリストで判定し、
+  それ以外はデフォルトで agent 経路に流す。
+- **リクエスト時の read 面は Firestore に閉じる**。3 collection、間に
+  cache を置かない。GitHub / X を叩くのは weekly Job だけで、Service は
+  render 時に外部 API を呼ばない。
+- **curation は 1 ファイル、2 か所に mount**。Service と X indexer Job
+  の両方が同じ Secret Manager (`x402-cms-tracked-handles`) を
+  `/secrets/tracked_handles.yaml` で読むので、renderer の cluster 分類と
+  indexer の fetch handle 集合がずれない。
+- **LLM は judgment の下流にのみ入る**。`/x402-survey` は retrieval +
+  clustering まで。observation と hypothesis は常に Shuhei が手で先に
+  書く (Phase 4 の設計原則)。
+
+## 2. リクエストシーケンス (人間 vs agent)
 
 ```mermaid
 sequenceDiagram
-  participant H as 人間（browser）
-  participant A as AI エージェント（MCP client）
-  participant S as x402-cms server
+  participant H as 人間 (browser)
+  participant A as AI agent
+  participant S as x402-cms Service
   participant F as Facilitator
   participant B as Base Sepolia
 
-  Note over H,A: 同じ URL に対して挙動が分岐する
+  Note over H,A: 同じ URL、振る舞いは別
 
-  H->>S: GET /digest/2026-W19<br/>Accept: text/html
-  S->>S: User-Agent 判定（human）
-  S-->>H: 200 OK<br/>HTML body（narrative + commentary）
+  H->>S: GET /digest/2026-W21<br/>Mozilla/...
+  S->>S: dispatch (human)
+  S-->>H: 200 OK · HTML
 
-  A->>S: GET /digest/2026-W19<br/>Accept: application/json
-  S->>S: User-Agent 判定（agent）
+  A->>S: GET /digest/2026-W21<br/>python-httpx/...
+  S->>S: dispatch (agent)
   S-->>A: 402 Payment Required<br/>+ payment-required header
 
-  A->>A: USDC payment payload に sign
-  A->>S: GET /digest/2026-W19<br/>X-Payment: signed-payload
-  S->>F: verify payment
-  F-->>S: verified
-  S->>F: settle payment
-  F->>B: USDC transfer
+  A->>A: EIP-3009 USDC authorization に署名
+  A->>S: GET /digest/2026-W21<br/>X-Payment: signed
+  S->>F: verify
+  F-->>S: ok
+  S->>F: settle
+  F->>B: USDC 転送
   F-->>S: settled
-  S-->>A: 200 OK<br/>JSON body（structured digest）
+  S-->>A: 200 OK · JSON<br/>+ payment-response header
 ```
 
-## 3. Phase 0 の現状（minimal endpoint）
-
-ここまで実装済みの範囲。content は hardcoded、scheme は `exact/evm`、network は Base Sepolia。
-
-dotted の edge（`verify/settle` と `transfer`）は real payment が来た場合に通る経路を示すが、Phase 0 では実際にはまだ通っていない。curl での動作確認は 402 が返ることまで。
-
-```mermaid
-graph LR
-  Client["curl / agent"]
-  Mid["x402 PaymentMiddlewareASGI"]
-  App["FastAPI app.py<br/>GET /digest/test<br/>hardcoded JSON"]
-  Fac["x402.org/facilitator"]
-  Base[("Base Sepolia<br/>USDC")]
-
-  Client -->|"GET /digest/test"| Mid
-  Mid -->|"402 Payment Required"| Client
-  Client -->|"GET + X-Payment"| Mid
-  Mid -.->|"verify/settle（Phase 0 では未踏）"| Fac
-  Fac -.->|"transfer"| Base
-  Mid --> App
-  App -->|"hardcoded JSON"| Mid
-  Mid -->|"200"| Client
-```
-
-## 4. データの流れ（vault が draft、Firestore が published）
-
-view content は人間が書く draft（vault）と server が読む published（Firestore）に分かれる。publish step が間に挟まる。
+## 3. データフロー
 
 ```mermaid
 flowchart LR
-  subgraph "Local（手元）"
-    Obsidian["Obsidian Vault<br/>x402_digest/views/2026-W19.md"]
+  subgraph Src["Source signals"]
+    GH["GitHub API"]
+    XAPI["X API v2"]
   end
 
-  subgraph "Manual trigger"
-    Publish["publish_views.py<br/>frontmatter published:true のみ sync"]
+  subgraph Ingest["Ingest"]
+    direction TB
+    Cron["Cloud Scheduler<br/>月 09:00 JST"]
+    Manual["/x402-reindex<br/>週中"]
+    GHJob["github_indexer Job"]
+    XJob["x_indexer Job"]
+    Cron --> GHJob
+    Cron --> XJob
+    Manual --> GHJob
+    Manual --> XJob
   end
 
-  subgraph "Server（Cloud Run）"
-    DBV["Firestore views collection"]
-    DBS["Firestore source_data collection"]
-    Render["render layer<br/>views と source を merge"]
-    Out["Response<br/>HTML or JSON"]
+  subgraph Curate["Curate (人間)"]
+    direction TB
+    Survey["/x402-survey<br/>retrieval + clustering"]
+    Vault["vault: YYYY-Www-slug.md<br/>frontmatter で固定する<br/>published / week_level /<br/>target_refs / recommended_rank / tldr"]
+    PubSkill["/x402-publish<br/>scan + validate + upsert"]
+    Survey -.->|"candidate surface"| Vault
+    Vault --> PubSkill
   end
 
-  subgraph "Automated"
-    GH["github_indexer"]
-    X["x_indexer"]
+  subgraph FS["Firestore"]
+    Srcd["source_data"]
+    Xp["x_posts"]
+    Cm["commentary"]
   end
 
-  Obsidian --> Publish
-  Publish --> DBV
-  GH --> DBS
-  X --> DBS
-  DBV --> Render
-  DBS --> Render
-  Render --> Out
+  subgraph Serve["Cloud Run Service"]
+    Bundle["load_digest_bundle"]
+    HTML["render_html"]
+    JSON["render_agent_payload"]
+  end
+
+  GH --> GHJob --> Srcd
+  XAPI --> XJob --> Xp
+  PubSkill --> Cm
+
+  Srcd --> Bundle
+  Xp --> Bundle
+  Cm --> Bundle
+  Bundle --> HTML
+  Bundle --> JSON
 ```
 
-## 5. Public / Private の分離
+補足:
 
-repo は public、Shuhei 固有の judgement layer のみ gitignore する。
+- vault 自体が private git repo (`shuhei0866/personal-notes`)。編集履歴は
+  git が持ち、Firestore は片道の publish 先。
+- `published: false` で unpublish (Firestore doc を削除して renderer から
+  見えなくする)。`delete: true` は明示的な retract 用フラグで、storage 層の
+  挙動は同じだが log 上の意図が異なる。
+- 週内の `recommended_rank` 一意性は publish 時の invariant。衝突したら
+  全 write 前に run を fail させるので、Firestore に rank=1 が同一週に
+  2 件並ぶことはない。
+
+## 4. デプロイトポロジー
 
 ```mermaid
 graph TB
-  subgraph "Public（OSS reference 実装）"
-    Code["code/<br/>indexers, renderers, server"]
-    Schema["schema/"]
-    Workflow[".github/workflows/"]
-    ReadmeFile["README.md / LICENSE"]
+  subgraph GCP["GCP project: my-utilities-490202"]
+    subgraph Region["Region: asia-northeast1"]
+      Service["Cloud Run Service<br/>x402-cms<br/>min-instances=1"]
+      Job1["Cloud Run Job<br/>x402-cms-indexer"]
+      Job2["Cloud Run Job<br/>x402-cms-x-indexer"]
+      Sched1["Scheduler<br/>x402-cms-indexer-weekly"]
+      Sched2["Scheduler<br/>x402-cms-x-indexer-weekly"]
+    end
+
+    subgraph SAs["Service Accounts"]
+      Runner["x402-cms-runner<br/>(Firestore + Secret reader)"]
+      Schler["x402-cms-scheduler<br/>(run.invoker)"]
+    end
+
+    subgraph SM["Secret Manager"]
+      BS["x402-cms-x-bearer"]
+      HS["x402-cms-tracked-handles"]
+    end
+
+    FSdb[("Firestore<br/>3 collections")]
   end
 
-  subgraph "Private（gitignore）"
-    Config["config/<br/>tracked_handles.yaml<br/>importance_rules.yaml"]
-    Prompts["prompts/<br/>commentary_template.md<br/>recommendation_prompt.md"]
-    Data["data/<br/>source/ (cache)<br/>views/ (vault mirror)"]
+  Sched1 -->|"oauth"| Job1
+  Sched2 -->|"oauth"| Job2
+
+  Job1 --> FSdb
+  Job2 --> FSdb
+  Service --> FSdb
+
+  BS -.->|"env var"| Job2
+  HS -.->|"file mount"| Job2
+  HS -.->|"file mount"| Service
+
+  Runner -.- Service
+  Runner -.- Job1
+  Runner -.- Job2
+  Schler -.- Sched1
+  Schler -.- Sched2
+```
+
+- **Service と Jobs の使い分け**。Service は常時起動 (`min-instances=1`、
+  cold start を回避)。Jobs は短命 (X indexer は 10〜20 秒で完走)。
+- **2 つの SA、権限は狭く**。`x402-cms-runner` は `datastore.user` +
+  対象 secret への `secretAccessor` のみ。`x402-cms-scheduler` は対象
+  2 Jobs への `run.invoker` のみ (プロジェクト広域ではない)。
+- **token と handles で mount スタイルが違う**。`X_BEARER_TOKEN` は
+  文字列なので env var として mount。handles yaml は構造データなので
+  `/secrets/tracked_handles.yaml` に file mount し、Service と X Job
+  の双方が `--handles-config` でその path を指す (loader のコードは
+  local dev と同じまま動く)。
+
+## 5. モジュールマップ
+
+refactor 後 (2026-05-27)。
+
+```
+code/
+├── schemas/                  {pr, x_post, commentary}.py · Pydantic models
+├── utils/
+│   ├── dates.py              parse_iso_week, previous_iso_week, week_of
+│   └── firestore.py          build_client (inject > project > ADC)
+├── indexers/
+│   ├── github_indexer.py     httpx + GitHub Search API
+│   ├── x_text_parser.py      parse_pr_references
+│   └── x_indexer/            (5 ファイル、旧 424 行モノリスを分解)
+│       ├── _http.py          API client + tweet → XPost 正規化
+│       ├── loader.py         tracked_handles.yaml (flat / clusters 両対応)
+│       ├── writer.py         x_posts upserter
+│       ├── orchestrator.py   週単位の resolve → fetch → write
+│       └── __main__.py       CLI
+├── renderers/
+│   └── digest/               (4 ファイル、旧 428 行モノリスを分解)
+│       ├── readers.py        3 つの Firestore reader
+│       ├── bundle.py         DigestBundle, cross-refs, recommendations,
+│       │                     JP cluster filter
+│       ├── html.py           render_html
+│       └── agent_json.py     render_agent_payload
+├── publish/
+│   ├── vault_parser.py       frontmatter 解析 + Commentary 構築
+│   └── publisher.py          scan + validate + tombstone + upsert
+├── survey/
+│   └── surveyor.py           /x402-survey のバックエンド (Markdown 出力)
+├── server/
+│   └── main.py               FastAPI app + ServerConfig + handler
+├── dispatch.py               User-Agent で human / agent を振り分け
+└── observability.py          構造化 JSON アクセスログ
+
+scripts/
+├── deploy.sh                 Service デプロイ (handles secret を mount)
+├── deploy_job.sh             github_indexer Job
+├── deploy_x_job.sh           x_indexer Job (両 secret を mount)
+├── setup_sa.sh               runtime SA
+├── setup_secrets.sh          bearer + handles secret (idempotent)
+├── setup_scheduler.sh        GitHub indexer Scheduler
+├── setup_x_scheduler.sh      X indexer Scheduler
+└── dogfood_payment_loop.py   buyer 側 smoke (Base Sepolia)
+```
+
+Claude Code 用スキル 3 本は本リポジトリ外、`~/.claude/skills/` 配下:
+
+| skill            | 役割                                                    |
+|------------------|---------------------------------------------------------|
+| `/x402-reindex`  | indexer の週中手動再走                                  |
+| `/x402-survey`   | 週内データの retrieval + clustering、judgment は入れない |
+| `/x402-publish`  | vault → Firestore commentary、rank 衝突を fail-fast      |
+
+## 6. Public / Private の分離
+
+```mermaid
+graph TB
+  subgraph PubOSS["Public (本リポジトリ、commit 済み)"]
+    Code["code/ · scripts/ · tests/"]
+    OSSCfg["config/tracked_handles.example.yaml"]
+    OSSPrompt["prompts/*.example.md"]
+    Infra["Dockerfile · pyproject.toml"]
+  end
+
+  subgraph Repo["Private (本リポジトリ、gitignored)"]
+    RealHandles["config/tracked_handles.yaml<br/>(curated 12 handles + clusters)"]
+    RealPrompts["prompts/*.md"]
     Env[".env"]
   end
 
-  subgraph "Vault（別 repo / iCloud）"
-    VaultDraft["vault: x402_digest/views/<br/>frontmatter: published bool"]
+  subgraph NotesRepo["Private (別リポジトリ: shuhei0866/personal-notes)"]
+    VaultPath["life_value_lab/.../my_vault/<br/>x402_digest/views/*.md"]
   end
 
-  VaultDraft -.->|"publish_views.py"| Data
+  subgraph Runtime["Runtime (Secret Manager)"]
+    SecBearer["x402-cms-x-bearer"]
+    SecHandles["x402-cms-tracked-handles"]
+  end
+
+  RealHandles -.->|"scripts/setup_secrets.sh"| SecHandles
+  Env -.->|"X_BEARER_TOKEN の値"| SecBearer
+  VaultPath -.->|"/x402-publish"| Code
 ```
+
+リポジトリは公開だが、curator の judgement レイヤは 3 つの private 面に
+分かれている:
+
+- **本リポジトリ内、gitignored**: curated handle list 本体、working
+  prompts、`.env`。commit 済みの `.example.yaml` / `.example.md` は
+  fresh clone が live X API に対して即座に動く template を担う。
+- **別リポジトリ**: vault。commentary draft と編集履歴はそこに住む。
+- **Secret Manager**: 本番 X bearer token と curated handle yaml。
+  Service + Job が起動時に mount する。どちらも `--set-env-vars` には
+  載せない (Cloud Audit Logs / Cloud Build log への漏洩を防ぐ)。
