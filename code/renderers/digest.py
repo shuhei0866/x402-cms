@@ -187,6 +187,7 @@ class DigestBundle:
     x_posts: list[XPost]
     cross_references: list[CrossReference]
     commentaries: list[Commentary] = field(default_factory=list)
+    handle_clusters: dict[str, str] = field(default_factory=dict)
 
 
 def load_digest_bundle(
@@ -195,13 +196,17 @@ def load_digest_bundle(
     repo: str = DEFAULT_REPO,
     project: str | None = None,
     client: firestore.Client | None = None,
+    handle_clusters: dict[str, str] | None = None,
 ) -> DigestBundle:
     """Read both source collections for `week` and assemble a `DigestBundle`.
 
     Reuses `read_week` and `read_x_posts_for_week`, then runs
     `build_cross_references` on the two lists. `client` injection
     propagates to both readers so a single MagicMock can drive the
-    whole assembly in tests.
+    whole assembly in tests. `handle_clusters` (handle → cluster name)
+    is loaded once by the caller at server startup and threaded
+    through every request — the renderer reads it to surface
+    cluster-specific sections (currently the Japan spotlight).
     """
     fs = _build_client(client, project)
     prs = read_week(week, client=fs)
@@ -215,6 +220,7 @@ def load_digest_bundle(
         x_posts=x_posts,
         cross_references=cross_references,
         commentaries=commentaries,
+        handle_clusters=handle_clusters or {},
     )
 
 
@@ -238,6 +244,18 @@ def _single_target_index(
         if not c.week_level and len(c.target_refs) == 1:
             index.setdefault(c.target_refs[0], []).append(c)
     return index
+
+
+JAPAN_CLUSTER = "japan"
+
+
+def _posts_in_cluster(
+    posts: list[XPost],
+    handle_clusters: dict[str, str],
+    cluster: str,
+) -> list[XPost]:
+    """X posts whose author handle maps to `cluster` in the curation."""
+    return [p for p in posts if handle_clusters.get(p.author_handle) == cluster]
 
 
 def render_html(bundle: DigestBundle) -> str:
@@ -276,6 +294,14 @@ def render_html(bundle: DigestBundle) -> str:
     x_items = "\n".join(
         _html_x_item(p, single_idx) for p in bundle.x_posts
     ) or "<li>No X posts this week.</li>"
+
+    jp_posts = _posts_in_cluster(
+        bundle.x_posts, bundle.handle_clusters, JAPAN_CLUSTER
+    )
+    jp_items = "\n".join(
+        _html_x_item(p, single_idx) for p in jp_posts
+    ) or "<li>No Japan community posts this week.</li>"
+
     cross_items = "\n".join(
         _html_cross_item(cr) for cr in bundle.cross_references
     ) or "<li>No cross-references this week.</li>"
@@ -315,6 +341,11 @@ def render_html(bundle: DigestBundle) -> str:
 <h2>X posts ({len(bundle.x_posts)})</h2>
 <ul>
 {x_items}
+</ul>
+
+<h2>Japan community ({len(jp_posts)})</h2>
+<ul>
+{jp_items}
 </ul>
 
 <h2>Cross-references ({len(bundle.cross_references)})</h2>
@@ -371,6 +402,9 @@ def render_agent_payload(bundle: DigestBundle) -> dict:
     to the full lists — the payload stays small even when the same
     note is both a pick and a body.
     """
+    jp_posts = _posts_in_cluster(
+        bundle.x_posts, bundle.handle_clusters, JAPAN_CLUSTER
+    )
     return {
         "week": bundle.week,
         "repo": bundle.repo,
@@ -390,4 +424,5 @@ def render_agent_payload(bundle: DigestBundle) -> dict:
             }
             for c in derive_recommendations(bundle.commentaries)
         ],
+        "japan_section": [p.model_dump(mode="json") for p in jp_posts],
     }

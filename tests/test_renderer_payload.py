@@ -60,9 +60,10 @@ def _bundle(prs=None, x_posts=None, cross_references=None) -> DigestBundle:
 class TestRenderAgentPayload:
     def test_top_level_keys_present(self) -> None:
         payload = render_agent_payload(_bundle())
-        # Phase 4 added `commentary` + `agent_recommendations`. The
-        # set is pinned exactly so an accidental key add/rename is
-        # caught — agents code against this shape.
+        # Phase 4 added `commentary` + `agent_recommendations`; Phase
+        # 3 added `japan_section`. The set is pinned exactly so an
+        # accidental key add/rename is caught — agents code against
+        # this shape.
         assert set(payload.keys()) == {
             "week",
             "repo",
@@ -72,6 +73,7 @@ class TestRenderAgentPayload:
             "cross_references",
             "commentary",
             "agent_recommendations",
+            "japan_section",
         }
 
     def test_count_reflects_pr_total_only(self) -> None:

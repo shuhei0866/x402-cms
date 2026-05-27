@@ -214,29 +214,83 @@ def write_to_firestore(
     return len(posts)
 
 
+def _normalise_handle_entry(entry: object) -> str | None:
+    if entry is None:
+        return None
+    cleaned = str(entry).strip().lstrip("@").strip()
+    return cleaned or None
+
+
+def _read_handles_yaml(path: str | Path) -> object:
+    with open(path, encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
 def load_tracked_handles(path: str | Path) -> list[str]:
-    """Read a YAML list of handles, normalised (no `@`, non-empty entries).
+    """Read tracked X handles as a flat list (cluster info discarded).
 
-    Format is a flat YAML list:
+    Two YAML shapes are accepted:
 
-        - phdargen
-        - CarsonRoscoe
+    1. **Flat list** — the original OSS-template form:
 
-    Blank entries are skipped, leading `@` is stripped. The file is
-    expected to be private (`config/tracked_handles.yaml`, gitignored);
-    the OSS surface ships `config/tracked_handles.example.yaml`.
+           - phdargen
+           - CarsonRoscoe
+
+    2. **Structured clusters** — the curated production form:
+
+           clusters:
+             protocol_core: [x402_org, base]
+             japan: [0x_natto, winor30]
+
+    The indexer's fetch loop does not care which cluster a handle
+    belongs to, only the renderer does. Blank entries are skipped and
+    leading `@` is stripped.
     """
-    with open(path, encoding="utf-8") as handle:
-        raw = yaml.safe_load(handle) or []
+    raw = _read_handles_yaml(path)
+    if raw is None:
+        return []
     handles: list[str] = []
-    for entry in raw:
-        if entry is None:
-            continue
-        cleaned = str(entry).strip().lstrip("@").strip()
-        if not cleaned:
-            continue
-        handles.append(cleaned)
+    if isinstance(raw, list):
+        candidates: list[object] = raw
+    elif isinstance(raw, dict) and isinstance(raw.get("clusters"), dict):
+        candidates = []
+        for entries in raw["clusters"].values():
+            if isinstance(entries, list):
+                candidates.extend(entries)
+    else:
+        raise ValueError(
+            f"{path}: expected a flat list or a 'clusters:' mapping"
+        )
+    for entry in candidates:
+        cleaned = _normalise_handle_entry(entry)
+        if cleaned:
+            handles.append(cleaned)
     return handles
+
+
+def load_handle_clusters(path: str | Path) -> dict[str, str]:
+    """Read the handle → cluster-name mapping, or `{}` for flat yaml.
+
+    The renderer reads this to surface per-cluster sections (e.g. the
+    Japan community spotlight). A flat OSS-template yaml has no
+    cluster information; the renderer treats an empty map as "skip
+    cluster-grouped sections".
+    """
+    raw = _read_handles_yaml(path)
+    if not isinstance(raw, dict):
+        return {}
+    clusters = raw.get("clusters")
+    if not isinstance(clusters, dict):
+        return {}
+    mapping: dict[str, str] = {}
+    for cluster_name, entries in clusters.items():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            cleaned = _normalise_handle_entry(entry)
+            if cleaned:
+                mapping[cleaned] = str(cluster_name)
+    return mapping
 
 
 def run_for_week(

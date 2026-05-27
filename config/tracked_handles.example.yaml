@@ -1,19 +1,28 @@
 # Tracked X (Twitter) handles for the weekly digest.
 #
-# The real file `config/tracked_handles.yaml` is gitignored — it's a
+# The real file `config/tracked_handles.yaml` is gitignored — it is a
 # curation choice, not OSS surface. This `.example.yaml` ships in the
 # repo so a fresh clone has a working template that resolves against
 # the live X API.
 #
-# Format: a flat YAML list of X handles (NOT GitHub handles). Entries
-# may include or omit the leading '@'; the indexer strips it. Blank
-# lines and YAML comments are ignored.
+# Format: a top-level `clusters:` mapping. Each cluster name is an
+# operational label; the indexer flattens to a single list of
+# handles, the renderer reads the mapping back to surface per-cluster
+# sections. Cluster names are free-form, but the renderer currently
+# treats `japan` specially (renders the Japan community spotlight).
+#
+# Leading '@' is optional (stripped by the indexer). The flat list
+# form is still accepted for backward compatibility, but ships as the
+# structured form so new clones see the canonical shape.
 #
 # X API quirk: an unknown handle returns HTTP 200 with an `errors`
 # body, not 404. The indexer classifies both as HandleNotFoundError
 # and skips the entry, so a typo here does not abort the run.
 
-- x402_org    # x402 protocol official account
-- base        # Coinbase Base L2 official
-- CoinbaseDev # Coinbase Developer Platform
-- DukeOphir   # Philippe d'Argent (GH: @phdargen) — Python SDK / AgentKit lead
+clusters:
+
+  protocol_core:
+    - x402_org    # x402 protocol official account
+    - base        # Coinbase Base L2 official
+    - CoinbaseDev # Coinbase Developer Platform
+    - DukeOphir   # Philippe d'Argent (GH: @phdargen) — Python SDK / AgentKit lead

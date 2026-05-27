@@ -15,7 +15,11 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from code.indexers.x_indexer import load_tracked_handles, run_for_week
+from code.indexers.x_indexer import (
+    load_handle_clusters,
+    load_tracked_handles,
+    run_for_week,
+)
 
 
 def _tweet_row(post_id: str, created_at: str) -> dict:
@@ -51,6 +55,71 @@ class TestLoadTrackedHandles:
         path = tmp_path / "nope.yaml"
         with pytest.raises(FileNotFoundError):
             load_tracked_handles(path)
+
+    def test_reads_structured_clusters_form_flattened(self, tmp_path: Path) -> None:
+        # Structured form: `clusters:` maps cluster name -> handle list.
+        # `load_tracked_handles` must still return a flat list — the
+        # indexer's fetch loop does not care which cluster a handle
+        # belongs to, only the renderer does.
+        path = tmp_path / "tracked_handles.yaml"
+        path.write_text(
+            """
+clusters:
+  protocol_core:
+    - x402_org
+    - base
+  japan:
+    - 0x_natto
+    - winor30
+""".lstrip()
+        )
+        assert load_tracked_handles(path) == [
+            "x402_org",
+            "base",
+            "0x_natto",
+            "winor30",
+        ]
+
+
+class TestLoadHandleClusters:
+    """Cluster mapping — handle → cluster name.
+
+    The renderer uses this to surface a "Japan community" section
+    without baking handle names into code. Flat yaml (no clusters
+    structure) returns an empty dict, which the renderer treats as
+    "no cluster info, skip the JP section" — keeping the example
+    template OSS-clean.
+    """
+
+    def test_returns_handle_to_cluster_map_for_structured_yaml(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "tracked_handles.yaml"
+        path.write_text(
+            """
+clusters:
+  protocol_core:
+    - x402_org
+  japan:
+    - 0x_natto
+    - winor30
+""".lstrip()
+        )
+        assert load_handle_clusters(path) == {
+            "x402_org": "protocol_core",
+            "0x_natto": "japan",
+            "winor30": "japan",
+        }
+
+    def test_strips_leading_at_signs(self, tmp_path: Path) -> None:
+        path = tmp_path / "tracked_handles.yaml"
+        path.write_text("clusters:\n  japan:\n    - '@0x_natto'\n")
+        assert load_handle_clusters(path) == {"0x_natto": "japan"}
+
+    def test_flat_yaml_returns_empty_dict(self, tmp_path: Path) -> None:
+        path = tmp_path / "tracked_handles.yaml"
+        path.write_text("- x402_org\n- base\n")
+        assert load_handle_clusters(path) == {}
 
 
 class TestRunForWeek:

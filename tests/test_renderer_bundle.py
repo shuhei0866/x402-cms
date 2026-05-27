@@ -115,6 +115,20 @@ class TestDigestBundle:
         assert bundle.prs == []
         assert bundle.x_posts == []
         assert bundle.cross_references == []
+        # Phase 3: handle_clusters defaults to an empty dict so older
+        # call sites (no curated mapping) keep working.
+        assert bundle.handle_clusters == {}
+
+    def test_handle_clusters_is_carried_through(self) -> None:
+        bundle = DigestBundle(
+            week="2026-W19",
+            repo="x402-foundation/x402",
+            prs=[],
+            x_posts=[],
+            cross_references=[],
+            handle_clusters={"0x_natto": "japan"},
+        )
+        assert bundle.handle_clusters == {"0x_natto": "japan"}
 
 
 class TestLoadDigestBundle:
@@ -164,3 +178,23 @@ class TestLoadDigestBundle:
         assert bundle.prs == []
         assert bundle.x_posts == []
         assert bundle.cross_references == []
+
+    def test_handle_clusters_passed_through_load(self) -> None:
+        client = _client_with_two_collections([], [])
+        clusters = {"0x_natto": "japan", "winor30": "japan"}
+        bundle = load_digest_bundle(
+            "2026-W19",
+            repo="x402-foundation/x402",
+            client=client,
+            handle_clusters=clusters,
+        )
+        assert bundle.handle_clusters == clusters
+
+    def test_no_handle_clusters_means_empty_dict(self) -> None:
+        client = _client_with_two_collections([], [])
+        bundle = load_digest_bundle(
+            "2026-W19",
+            repo="x402-foundation/x402",
+            client=client,
+        )
+        assert bundle.handle_clusters == {}
