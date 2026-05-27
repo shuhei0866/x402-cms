@@ -25,6 +25,7 @@ from google.cloud import firestore
 from code.indexers.x_text_parser import parse_pr_references
 from code.schemas.x_post import XPost, XPostMetrics
 from code.utils.dates import parse_iso_week, previous_iso_week, week_of
+from code.utils.firestore import build_client
 
 X_API_BASE = os.getenv("X_API_BASE", "https://api.x.com")
 X_COLLECTION = "x_posts"
@@ -205,10 +206,7 @@ def write_to_firestore(
     """
     if not posts:
         return 0
-    fs = client or (
-        firestore.Client(project=project) if project else firestore.Client()
-    )
-    collection = fs.collection(X_COLLECTION)
+    collection = build_client(client, project).collection(X_COLLECTION)
     for post in posts:
         collection.document(post.post_id).set(post.model_dump(mode="json"))
     return len(posts)

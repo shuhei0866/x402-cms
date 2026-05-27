@@ -20,20 +20,12 @@ from markdown_it import MarkdownIt
 from code.schemas.commentary import Commentary
 from code.schemas.pr import MergedPR
 from code.schemas.x_post import XPost
+from code.utils.firestore import build_client
 
 COLLECTION = "source_data"
 X_COLLECTION = "x_posts"
 COMMENTARY_COLLECTION = "commentary"
 DEFAULT_REPO = "x402-foundation/x402"
-
-
-def _build_client(
-    client: firestore.Client | None,
-    project: str | None,
-) -> firestore.Client:
-    if client is not None:
-        return client
-    return firestore.Client(project=project) if project else firestore.Client()
 
 
 def read_week(
@@ -48,7 +40,7 @@ def read_week(
     in chronological reverse order without each renderer having to
     re-sort.
     """
-    fs = _build_client(client, project)
+    fs = build_client(client, project)
     docs = (
         fs.collection(COLLECTION)
         .where(filter=firestore.FieldFilter("week", "==", week))
@@ -71,7 +63,7 @@ def read_x_posts_for_week(
     typed Pydantic model, sort newest-first on `created_at`. The
     renderer can then iterate without re-sorting.
     """
-    fs = _build_client(client, project)
+    fs = build_client(client, project)
     docs = (
         fs.collection(X_COLLECTION)
         .where(filter=firestore.FieldFilter("week", "==", week))
@@ -95,7 +87,7 @@ def read_commentary_for_week(
     doc), so everything read here is live. Sorted newest-first on
     `published_at`; a missing timestamp sorts last.
     """
-    fs = _build_client(client, project)
+    fs = build_client(client, project)
     docs = (
         fs.collection(COMMENTARY_COLLECTION)
         .where(filter=firestore.FieldFilter("week", "==", week))
@@ -208,7 +200,7 @@ def load_digest_bundle(
     through every request — the renderer reads it to surface
     cluster-specific sections (currently the Japan spotlight).
     """
-    fs = _build_client(client, project)
+    fs = build_client(client, project)
     prs = read_week(week, client=fs)
     x_posts = read_x_posts_for_week(week, client=fs)
     commentaries = read_commentary_for_week(week, client=fs)

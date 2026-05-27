@@ -23,6 +23,7 @@ from pathlib import Path
 from google.cloud import firestore
 
 from code.publish.vault_parser import parse_vault_file
+from code.utils.firestore import build_client
 
 COMMENTARY_COLLECTION = "commentary"
 
@@ -83,10 +84,7 @@ def publish_vault_dir(
     if not parsed:
         return summary
 
-    fs = client or (
-        firestore.Client(project=project) if project else firestore.Client()
-    )
-    collection = fs.collection(COMMENTARY_COLLECTION)
+    collection = build_client(client, project).collection(COMMENTARY_COLLECTION)
 
     for pf in parsed:
         doc = collection.document(pf.slug)

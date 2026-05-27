@@ -30,10 +30,10 @@ import sys
 from datetime import date, datetime, timedelta
 
 import httpx
-from google.cloud import firestore
 
 from code.schemas.pr import MergedPR
 from code.utils.dates import parse_iso_week, previous_iso_week
+from code.utils.firestore import build_client
 
 DEFAULT_REPO = "x402-foundation/x402"
 COLLECTION = "source_data"
@@ -123,8 +123,7 @@ def doc_id(pr: MergedPR) -> str:
 
 def write_to_firestore(prs: list[MergedPR], project: str | None = None) -> int:
     """Write merged PRs to Firestore. Returns the number of documents written."""
-    client = firestore.Client(project=project) if project else firestore.Client()
-    collection = client.collection(COLLECTION)
+    collection = build_client(project=project).collection(COLLECTION)
     for pr in prs:
         collection.document(doc_id(pr)).set(pr.model_dump(mode="json"))
     return len(prs)

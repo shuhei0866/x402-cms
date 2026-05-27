@@ -35,6 +35,7 @@ from code.renderers.digest import (
 from code.schemas.pr import MergedPR
 from code.schemas.x_post import XPost
 from code.utils.dates import previous_iso_week
+from code.utils.firestore import build_client
 
 
 def _pr_token(pr: MergedPR) -> str:
@@ -162,9 +163,7 @@ def survey_week(
     referenced by tweet). Does NOT call any LLM and does NOT decide
     what to write — the next step is the human, in the vault.
     """
-    fs = client or (
-        firestore.Client(project=project) if project else firestore.Client()
-    )
+    fs = build_client(client, project)
     handle_clusters = handle_clusters or {}
 
     prs = read_week(week, client=fs)
