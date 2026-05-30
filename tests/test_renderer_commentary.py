@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 from code.renderers.digest import (
     COLLECTION,
     COMMENTARY_COLLECTION,
+    ISSUES_COLLECTION,
     X_COLLECTION,
     DigestBundle,
     derive_recommendations,
@@ -151,6 +152,8 @@ class TestBundleCarriesCommentary:
         pr_coll.where.return_value.stream.return_value = iter([])
         x_coll = MagicMock()
         x_coll.where.return_value.stream.return_value = iter([])
+        i_coll = MagicMock()
+        i_coll.where.return_value.stream.return_value = iter([])
         c_coll = MagicMock()
         c_coll.where.return_value.stream.return_value = iter(
             _docs(
@@ -171,6 +174,7 @@ class TestBundleCarriesCommentary:
                 COLLECTION: pr_coll,
                 X_COLLECTION: x_coll,
                 COMMENTARY_COLLECTION: c_coll,
+                ISSUES_COLLECTION: i_coll,
             }[name]
 
         client.collection.side_effect = route

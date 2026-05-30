@@ -14,11 +14,14 @@ from google.cloud import firestore
 
 from code.renderers.digest.readers import (
     read_commentary_for_week,
+    read_issues_for_week,
+    read_prs_by_kind,
     read_week,
     read_x_posts_for_week,
 )
 from code.schemas.commentary import Commentary
-from code.schemas.pr import MergedPR
+from code.schemas.issue import IssueRecord
+from code.schemas.pr import MergedPR, PRRecord
 from code.schemas.x_post import XPost
 from code.utils.firestore import build_client
 
@@ -113,6 +116,9 @@ class DigestBundle:
     cross_references: list[CrossReference]
     commentaries: list[Commentary] = field(default_factory=list)
     handle_clusters: dict[str, str] = field(default_factory=dict)
+    active_prs: list[PRRecord] = field(default_factory=list)
+    new_prs: list[PRRecord] = field(default_factory=list)
+    issues: list[IssueRecord] = field(default_factory=list)
 
 
 def load_digest_bundle(
@@ -132,8 +138,11 @@ def load_digest_bundle(
     """
     fs = build_client(client, project)
     prs = read_week(week, client=fs)
+    active_prs = read_prs_by_kind(week, "active", client=fs)
+    new_prs = read_prs_by_kind(week, "new", client=fs)
     x_posts = read_x_posts_for_week(week, client=fs)
     commentaries = read_commentary_for_week(week, client=fs)
+    issues = read_issues_for_week(week, client=fs)
     cross_references = build_cross_references(prs, x_posts)
     return DigestBundle(
         week=week,
@@ -143,4 +152,7 @@ def load_digest_bundle(
         cross_references=cross_references,
         commentaries=commentaries,
         handle_clusters=handle_clusters or {},
+        active_prs=active_prs,
+        new_prs=new_prs,
+        issues=issues,
     )

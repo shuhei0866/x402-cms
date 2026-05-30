@@ -1,8 +1,11 @@
 """Firestore readers for a single ISO week.
 
-Three readers, one per source collection. Each filters by `week`,
-rehydrates into the typed Pydantic model, and sorts newest-first so
-the renderer never re-sorts.
+One reader per source signal. Each filters by `week`, rehydrates into
+the typed Pydantic model, and sorts newest-first so the renderer never
+re-sorts. `read_week` returns merged PRs; `read_prs_by_kind` returns
+the active / new PRs the multi-kind indexer also writes to
+`source_data`; `read_issues_for_week` reads the separate `issues`
+collection.
 """
 
 from __future__ import annotations
@@ -12,13 +15,15 @@ from datetime import datetime, timezone
 from google.cloud import firestore
 
 from code.schemas.commentary import Commentary
-from code.schemas.pr import MergedPR
+from code.schemas.issue import IssueRecord
+from code.schemas.pr import MergedPR, PRRecord
 from code.schemas.x_post import XPost
 from code.utils.firestore import build_client
 
 COLLECTION = "source_data"
 X_COLLECTION = "x_posts"
 COMMENTARY_COLLECTION = "commentary"
+ISSUES_COLLECTION = "issues"
 DEFAULT_REPO = "x402-foundation/x402"
 
 
@@ -53,6 +58,41 @@ def read_week(
         prs.append(MergedPR.model_validate(data))
     prs.sort(key=lambda p: p.merged_at, reverse=True)
     return prs
+
+
+def read_prs_by_kind(
+    week: str,
+    kind: str,
+    project: str | None = None,
+    *,
+    client: firestore.Client | None = None,
+) -> list[PRRecord]:
+    """Load PRs of a given `kind` (``active`` / ``new``) for an ISO week.
+
+    Reads the same `source_data` collection as `read_week`, but keeps
+    the rows the multi-kind indexer labels `active` (open/draft PRs
+    with live discussion) or `new` (opened this week). Those rows have
+    no `merged_at`, so they rehydrate into `PRRecord` rather than the
+    merged-only `MergedPR` view. Sorted newest-first on the timestamp
+    the kind keys on — `updated_at` for active, `created_at` for new —
+    with a min-sentinel so a missing timestamp sorts last.
+    """
+    fs = build_client(client, project)
+    docs = (
+        fs.collection(COLLECTION)
+        .where(filter=firestore.FieldFilter("week", "==", week))
+        .stream()
+    )
+    records: list[PRRecord] = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if data.get("kind") != kind:
+            continue
+        records.append(PRRecord.model_validate(data))
+    _floor = datetime.min.replace(tzinfo=timezone.utc)
+    sort_attr = "updated_at" if kind == "active" else "created_at"
+    records.sort(key=lambda r: getattr(r, sort_attr) or _floor, reverse=True)
+    return records
 
 
 def read_x_posts_for_week(
@@ -106,3 +146,29 @@ def read_commentary_for_week(
         reverse=True,
     )
     return commentaries
+
+
+def read_issues_for_week(
+    week: str,
+    project: str | None = None,
+    *,
+    client: firestore.Client | None = None,
+) -> list[IssueRecord]:
+    """Load active issues for a given ISO week from the `issues` collection.
+
+    Issues live in their own collection (the issue indexer keeps them
+    apart from PRs). Sorted most-discussed first — by comment count,
+    then newest `updated_at` as a tiebreak — so the renderer surfaces
+    the liveliest threads at the top. A missing `updated_at` sorts last
+    within its comment-count bucket.
+    """
+    fs = build_client(client, project)
+    docs = (
+        fs.collection(ISSUES_COLLECTION)
+        .where(filter=firestore.FieldFilter("week", "==", week))
+        .stream()
+    )
+    issues = [IssueRecord.model_validate(doc.to_dict()) for doc in docs]
+    _floor = datetime.min.replace(tzinfo=timezone.utc)
+    issues.sort(key=lambda i: (i.comments, i.updated_at or _floor), reverse=True)
+    return issues

@@ -2,7 +2,8 @@
 
 Split out of the original `digest.py` for clarity. Sub-modules:
 
-- `readers`      three Firestore readers (PRs / X posts / commentary)
+- `readers`      Firestore readers (merged / active / new PRs, X posts,
+                 commentary, issues)
 - `bundle`       `DigestBundle` + cross-references + recommendations +
                  the JP-cluster filter shared by both renderers
 - `html`         the human HTML view
@@ -27,8 +28,11 @@ from code.renderers.digest.readers import (
     COLLECTION,
     COMMENTARY_COLLECTION,
     DEFAULT_REPO,
+    ISSUES_COLLECTION,
     X_COLLECTION,
     read_commentary_for_week,
+    read_issues_for_week,
+    read_prs_by_kind,
     read_week,
     read_x_posts_for_week,
 )
@@ -38,10 +42,13 @@ __all__ = [
     "COLLECTION",
     "COMMENTARY_COLLECTION",
     "DEFAULT_REPO",
+    "ISSUES_COLLECTION",
     "JAPAN_CLUSTER",
     "X_COLLECTION",
     # readers
     "read_commentary_for_week",
+    "read_issues_for_week",
+    "read_prs_by_kind",
     "read_week",
     "read_x_posts_for_week",
     # bundle + join layer

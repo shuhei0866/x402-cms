@@ -1,10 +1,10 @@
 """Human HTML view.
 
 Order: week preface (prose, only if a week-level note exists) →
-Picks (ranked <ol>) → Merged PRs → X posts → Japan community →
-Cross-references → end Commentary section (multi-target notes,
-anchored). Single-target notes are inlined as a <blockquote> on
-their PR / X item.
+Picks (ranked <ol>) → Merged PRs → Active discussions → Newly opened →
+Issues → X posts → Japan community → Cross-references → end Commentary
+section (multi-target notes, anchored). Single-target notes are inlined
+as a <blockquote> on their PR / X item.
 
 Markdown is converted with markdown-it-py (raw HTML disabled, the
 commonmark default) and then nh3-sanitised. The sanitiser only runs
@@ -29,7 +29,8 @@ from code.renderers.digest.bundle import (
     posts_in_cluster,
 )
 from code.schemas.commentary import Commentary
-from code.schemas.pr import MergedPR
+from code.schemas.issue import IssueRecord
+from code.schemas.pr import MergedPR, PRRecord
 from code.schemas.x_post import XPost
 
 _MD = MarkdownIt()
@@ -66,6 +67,46 @@ def _html_pr_item(pr: MergedPR, single_idx: dict[str, list[Commentary]]) -> str:
         f'<li><a href="{escape(pr.url)}">#{pr.pr_number}</a> '
         f'{escape(pr.title)} — <em>@{escape(pr.author)}</em>, '
         f"merged {pr.merged_at:%Y-%m-%d}{bq}</li>"
+    )
+
+
+def _html_pr_record_item(
+    pr: PRRecord, single_idx: dict[str, list[Commentary]]
+) -> str:
+    """An active / new PR row — status-aware, with inline commentary.
+
+    The PR carries no `merged_at` (it is not merged), so the trailing
+    phrase reports the state and the timestamp the kind keys on:
+    `active` rows show the comment count and last-updated date, `new`
+    rows show the opened date. Commentary attaches the same way it does
+    to merged PRs — by the `pr:repo#N` token.
+    """
+    bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
+    if pr.kind == "active":
+        when = (
+            f"updated {pr.updated_at:%Y-%m-%d}"
+            if pr.updated_at
+            else "recently active"
+        )
+        tail = f"{pr.status}, {pr.comments} comments, {when}"
+    else:
+        when = f"opened {pr.created_at:%Y-%m-%d}" if pr.created_at else "newly opened"
+        tail = f"{pr.status}, {when}"
+    return (
+        f'<li><a href="{escape(pr.url)}">#{pr.pr_number}</a> '
+        f'{escape(pr.title)} — <em>@{escape(pr.author)}</em>, '
+        f"{tail}{bq}</li>"
+    )
+
+
+def _html_issue_item(issue: IssueRecord) -> str:
+    when = (
+        f"updated {issue.updated_at:%Y-%m-%d}" if issue.updated_at else issue.state
+    )
+    return (
+        f'<li><a href="{escape(issue.url)}">#{issue.issue_number}</a> '
+        f'{escape(issue.title)} — <em>@{escape(issue.author)}</em>, '
+        f"{issue.state}, {issue.comments} comments, {when}</li>"
     )
 
 
@@ -106,6 +147,15 @@ def render_html(bundle: DigestBundle) -> str:
     pr_items = "\n".join(
         _html_pr_item(pr, single_idx) for pr in bundle.prs
     ) or "<li>No merged PRs this week.</li>"
+    active_items = "\n".join(
+        _html_pr_record_item(pr, single_idx) for pr in bundle.active_prs
+    ) or "<li>No active discussions this week.</li>"
+    new_items = "\n".join(
+        _html_pr_record_item(pr, single_idx) for pr in bundle.new_prs
+    ) or "<li>No newly opened PRs this week.</li>"
+    issue_items = "\n".join(
+        _html_issue_item(i) for i in bundle.issues
+    ) or "<li>No active issues this week.</li>"
     x_items = "\n".join(
         _html_x_item(p, single_idx) for p in bundle.x_posts
     ) or "<li>No X posts this week.</li>"
@@ -151,6 +201,21 @@ def render_html(bundle: DigestBundle) -> str:
 <h2>Merged PRs ({len(bundle.prs)})</h2>
 <ul>
 {pr_items}
+</ul>
+
+<h2>Active discussions ({len(bundle.active_prs)})</h2>
+<ul>
+{active_items}
+</ul>
+
+<h2>Newly opened ({len(bundle.new_prs)})</h2>
+<ul>
+{new_items}
+</ul>
+
+<h2>Issues ({len(bundle.issues)})</h2>
+<ul>
+{issue_items}
 </ul>
 
 <h2>X posts ({len(bundle.x_posts)})</h2>

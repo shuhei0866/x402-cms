@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 from code.renderers.digest import (
     COLLECTION,
     COMMENTARY_COLLECTION,
+    ISSUES_COLLECTION,
     X_COLLECTION,
     CrossReference,
     DigestBundle,
@@ -57,6 +58,58 @@ def _xpost_dict(
     }
 
 
+def _pr_kind_dict(
+    number: int,
+    *,
+    kind: str,
+    status: str,
+    updated_at: datetime | None = None,
+    created_at: datetime | None = None,
+    week: str = "2026-W19",
+) -> dict:
+    """A non-merged PR document the multi-kind indexer writes."""
+    return {
+        "repo": "x402-foundation/x402",
+        "pr_number": number,
+        "title": f"PR {number}",
+        "author": "someone",
+        "url": f"https://github.com/x402-foundation/x402/pull/{number}",
+        "week": week,
+        "status": status,
+        "kind": kind,
+        "merged_at": None,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+        "created_at": created_at.isoformat() if created_at else None,
+        "comments": 3,
+        "labels": [],
+    }
+
+
+def _issue_dict(
+    number: int,
+    *,
+    comments: int = 5,
+    updated_at: datetime | None = None,
+    week: str = "2026-W19",
+) -> dict:
+    """An active issue document from the `issues` collection."""
+    return {
+        "repo": "x402-foundation/x402",
+        "issue_number": number,
+        "title": f"Issue {number}",
+        "author": "someone",
+        "url": f"https://github.com/x402-foundation/x402/issues/{number}",
+        "week": week,
+        "state": "open",
+        "kind": "active",
+        "comments": comments,
+        "created_at": None,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+        "closed_at": None,
+        "labels": [],
+    }
+
+
 def _docs(payloads: list[dict]) -> list[MagicMock]:
     out = []
     for p in payloads:
@@ -70,23 +123,28 @@ def _client_with_two_collections(
     pr_payloads: list[dict],
     x_post_payloads: list[dict],
     commentary_payloads: list[dict] | None = None,
+    issue_payloads: list[dict] | None = None,
 ) -> MagicMock:
     """A MagicMock firestore client whose `.collection(name)` routes to
     the right docs depending on which collection the reader queries.
-    `load_digest_bundle` now reads three collections; commentary
-    defaults to empty so the existing PR/X assertions stay focused."""
+    `load_digest_bundle` reads `source_data` three times (merged /
+    active / new) and four collections in all, so every `.stream()`
+    hands back a fresh iterator and `issues` is routed too. Commentary
+    and issues default to empty so the existing PR / X assertions stay
+    focused."""
     client = MagicMock()
 
-    pr_coll = MagicMock()
-    pr_coll.where.return_value.stream.return_value = iter(_docs(pr_payloads))
+    def _coll(payloads: list[dict]) -> MagicMock:
+        coll = MagicMock()
+        coll.where.return_value.stream.side_effect = (
+            lambda *a, **k: iter(_docs(payloads))
+        )
+        return coll
 
-    x_coll = MagicMock()
-    x_coll.where.return_value.stream.return_value = iter(_docs(x_post_payloads))
-
-    c_coll = MagicMock()
-    c_coll.where.return_value.stream.return_value = iter(
-        _docs(commentary_payloads or [])
-    )
+    pr_coll = _coll(pr_payloads)
+    x_coll = _coll(x_post_payloads)
+    c_coll = _coll(commentary_payloads or [])
+    i_coll = _coll(issue_payloads or [])
 
     def route(name: str) -> MagicMock:
         if name == COLLECTION:
@@ -95,6 +153,8 @@ def _client_with_two_collections(
             return x_coll
         if name == COMMENTARY_COLLECTION:
             return c_coll
+        if name == ISSUES_COLLECTION:
+            return i_coll
         raise AssertionError(f"unexpected collection name: {name}")
 
     client.collection.side_effect = route
@@ -198,3 +258,40 @@ class TestLoadDigestBundle:
             client=client,
         )
         assert bundle.handle_clusters == {}
+
+    def test_separates_prs_by_kind_and_loads_issues(self) -> None:
+        # `source_data` mixes merged / active / new rows under `kind`;
+        # the bundle routes each to its own list, and `issues` comes
+        # from the separate collection. read_week keeps merged (and
+        # kind-less) rows; the active / new readers each keep their own
+        # kind. Issues sort most-discussed first.
+        pr_payloads = [
+            _pr_dict(1, merged_at=datetime(2026, 5, 5, tzinfo=timezone.utc)),
+            _pr_kind_dict(
+                2,
+                kind="active",
+                status="open",
+                updated_at=datetime(2026, 5, 7, tzinfo=timezone.utc),
+            ),
+            _pr_kind_dict(
+                3,
+                kind="new",
+                status="open",
+                created_at=datetime(2026, 5, 6, tzinfo=timezone.utc),
+            ),
+        ]
+        issue_payloads = [_issue_dict(10, comments=8), _issue_dict(11, comments=2)]
+        client = _client_with_two_collections(
+            pr_payloads, [], issue_payloads=issue_payloads
+        )
+
+        bundle = load_digest_bundle(
+            "2026-W19", repo="x402-foundation/x402", client=client
+        )
+
+        assert [pr.pr_number for pr in bundle.prs] == [1]
+        assert [pr.pr_number for pr in bundle.active_prs] == [2]
+        assert [pr.pr_number for pr in bundle.new_prs] == [3]
+        assert bundle.active_prs[0].kind == "active"
+        assert bundle.new_prs[0].kind == "new"
+        assert [i.issue_number for i in bundle.issues] == [10, 11]
