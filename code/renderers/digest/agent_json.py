@@ -1,7 +1,8 @@
 """Agent JSON view.
 
-Full-row lists (`merged_prs`, `x_posts`, `commentary`, `japan_section`)
-ride alongside normalised reference lists (`cross_references`,
+Full-row lists (`merged_prs`, `active_prs`, `new_prs`, `issues`,
+`x_posts`, `commentary`, `japan_section`) ride alongside normalised
+reference lists (`cross_references`,
 `agent_recommendations`) so the payload stays small even when the
 same note is both a pick and a body. The top-level key set is
 pinned by `test_renderer_payload.test_top_level_keys_present` — an
@@ -28,6 +29,9 @@ def render_agent_payload(bundle: DigestBundle) -> dict:
         "repo": bundle.repo,
         "count": len(bundle.prs),
         "merged_prs": [pr.model_dump(mode="json") for pr in bundle.prs],
+        "active_prs": [pr.model_dump(mode="json") for pr in bundle.active_prs],
+        "new_prs": [pr.model_dump(mode="json") for pr in bundle.new_prs],
+        "issues": [i.model_dump(mode="json") for i in bundle.issues],
         "x_posts": [p.model_dump(mode="json") for p in bundle.x_posts],
         "cross_references": [
             {"pr_ref": cr.pr_ref, "x_post_ids": cr.x_post_ids}
