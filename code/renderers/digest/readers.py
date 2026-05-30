@@ -33,6 +33,11 @@ def read_week(
     Results are sorted newest-first on `merged_at` so both views render
     in chronological reverse order without each renderer having to
     re-sort.
+
+    Skips non-merged rows that the active/new indexers may have written
+    to the same collection. Pre-multi-kind documents lacked a `kind`
+    field, so a missing `kind` is treated as merged for backward
+    compatibility.
     """
     fs = build_client(client, project)
     docs = (
@@ -40,7 +45,12 @@ def read_week(
         .where(filter=firestore.FieldFilter("week", "==", week))
         .stream()
     )
-    prs = [MergedPR.model_validate(doc.to_dict()) for doc in docs]
+    prs: list[MergedPR] = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if data.get("kind", "merged") != "merged":
+            continue
+        prs.append(MergedPR.model_validate(data))
     prs.sort(key=lambda p: p.merged_at, reverse=True)
     return prs
 
