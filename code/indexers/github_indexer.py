@@ -187,15 +187,18 @@ def fetch_prs(
 
 
 def doc_id(pr: PRRecord) -> str:
-    """Firestore document ID for a PR — keyed for idempotency.
+    """Firestore document ID for a PR — `{repo_safe}_{pr_number}_{week}`.
 
-    The kind is intentionally left out: a PR that crosses kinds within
-    the same week (e.g. active early in the week, merged on Friday)
-    should converge on a single row with the latest status, not two
-    rivalling docs.
+    The kind is left out so a PR that crosses kinds within the same
+    week (active early in the week, merged on Friday) converges on a
+    single row with the latest status, not two rivalling docs. The week
+    is part of the key so a PR that stays active across weeks is
+    snapshotted per week: without it a later week's run would rewrite
+    an earlier week's row's `week` field and drop it from that week's
+    digest (the readers filter by `week`).
     """
     repo_safe = pr.repo.replace("/", "__")
-    return f"{repo_safe}_{pr.pr_number}"
+    return f"{repo_safe}_{pr.pr_number}_{pr.week}"
 
 
 def write_to_firestore(prs: list[PRRecord], project: str | None = None) -> int:

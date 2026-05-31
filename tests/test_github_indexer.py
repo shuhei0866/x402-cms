@@ -18,7 +18,13 @@ from datetime import date
 
 import httpx
 
-from code.indexers.github_indexer import _build_query, _status_for, fetch_prs
+from code.indexers.github_indexer import (
+    _build_query,
+    _status_for,
+    doc_id,
+    fetch_prs,
+)
+from code.schemas.pr import PRRecord
 
 REPO = "x402-foundation/x402"
 START = date(2026, 5, 4)
@@ -177,3 +183,35 @@ class TestFetchPrs:
         handler, _ = _responder([])
         with _client(handler) as client:
             assert fetch_prs(REPO, "new", START, END, http_client=client) == []
+
+
+class TestDocId:
+    @staticmethod
+    def _pr(week: str, *, number: int = 1234, kind: str = "active") -> PRRecord:
+        return PRRecord(
+            repo="x402-foundation/x402",
+            pr_number=number,
+            title="t",
+            author="a",
+            url="u",
+            week=week,
+            status="open",
+            kind=kind,
+        )
+
+    def test_includes_week_so_cross_week_rows_do_not_collide(self) -> None:
+        # A PR active across two weeks lands in two docs, one per week,
+        # so a later week's run never overwrites the earlier week's row
+        # (which the readers filter by `week`).
+        w21 = doc_id(self._pr("2026-W21"))
+        w22 = doc_id(self._pr("2026-W22"))
+        assert w21 != w22
+        assert w21 == "x402-foundation__x402_1234_2026-W21"
+        assert w22.endswith("_2026-W22")
+
+    def test_same_pr_same_week_converges_regardless_of_kind(self) -> None:
+        # Kind is not in the id: active / new / merged of the same PR in
+        # the same week share one doc (merged wins via write order).
+        assert doc_id(self._pr("2026-W22", number=9, kind="active")) == doc_id(
+            self._pr("2026-W22", number=9, kind="merged")
+        )

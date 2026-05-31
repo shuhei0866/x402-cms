@@ -140,9 +140,14 @@ def fetch_active_issues(
 
 
 def doc_id(issue: IssueRecord) -> str:
-    """Firestore document ID for an issue — keyed for idempotency."""
+    """Firestore document ID for an issue — `{repo_safe}_{number}_{week}`.
+
+    The week is part of the key so an issue that stays active across
+    weeks is snapshotted per week, rather than a later week's run
+    overwriting (and dropping) an earlier week's row.
+    """
     repo_safe = issue.repo.replace("/", "__")
-    return f"{repo_safe}_{issue.issue_number}"
+    return f"{repo_safe}_{issue.issue_number}_{issue.week}"
 
 
 def write_to_firestore(issues: list[IssueRecord], project: str | None = None) -> int:

@@ -18,7 +18,12 @@ from datetime import date
 
 import httpx
 
-from code.indexers.github_issue_indexer import _is_pull_request, fetch_active_issues
+from code.indexers.github_issue_indexer import (
+    _is_pull_request,
+    doc_id,
+    fetch_active_issues,
+)
+from code.schemas.issue import IssueRecord
 
 REPO = "x402-foundation/x402"
 START = date(2026, 5, 4)
@@ -124,3 +129,21 @@ class TestFetchActiveIssues:
 
         with _client(handler) as client:
             assert fetch_active_issues(REPO, START, END, http_client=client) == []
+
+
+class TestDocId:
+    def test_includes_week_so_cross_week_rows_do_not_collide(self) -> None:
+        def _issue(week: str) -> IssueRecord:
+            return IssueRecord(
+                repo="x402-foundation/x402",
+                issue_number=50,
+                title="t",
+                author="a",
+                url="u",
+                week=week,
+                state="open",
+                kind="active",
+            )
+
+        assert doc_id(_issue("2026-W21")) != doc_id(_issue("2026-W22"))
+        assert doc_id(_issue("2026-W22")) == "x402-foundation__x402_50_2026-W22"

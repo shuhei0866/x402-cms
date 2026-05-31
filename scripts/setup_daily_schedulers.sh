@@ -44,7 +44,12 @@ ROLE_ID="x402cmsJobOverrideRunner"
 ROLE="projects/${PROJECT}/roles/${ROLE_ID}"
 
 if gcloud iam roles describe "$ROLE_ID" --project "$PROJECT" >/dev/null 2>&1; then
-  echo "custom role $ROLE_ID exists"
+  # Reconcile the permission set so a re-run repairs a role that has
+  # drifted (gained or lost permissions), rather than trusting that it
+  # still holds exactly what it needs.
+  gcloud iam roles update "$ROLE_ID" --project "$PROJECT" \
+    --permissions run.jobs.run,run.jobs.runWithOverrides >/dev/null
+  echo "reconciled custom role $ROLE_ID"
 else
   gcloud iam roles create "$ROLE_ID" --project "$PROJECT" \
     --title "x402-cms job override runner" \

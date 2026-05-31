@@ -1,9 +1,10 @@
 """CLI entrypoint: `python -m code.indexers.x_indexer`.
 
-Reads tracked handles + `X_BEARER_TOKEN`, runs `run_for_week` for
-either an explicit `--week` or the previous ISO week, and prints the
-summary JSON to stdout. `--dry-run` mirrors the github indexer:
-fetch + report, no Firestore write.
+Reads tracked handles + `X_BEARER_TOKEN`, runs `run_for_week` for the
+week resolved by `resolve_target_week` (explicit `--week` > `--current`
+in-progress week > previous ISO week), and prints the summary JSON to
+stdout. `--dry-run` mirrors the github indexer: fetch + report, no
+Firestore write.
 """
 
 from __future__ import annotations
