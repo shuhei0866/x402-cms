@@ -11,7 +11,8 @@ Run with:
     uv run python -m code.indexers.github_issue_indexer --week 2026-W19 --min-comments 3
 
 Stored in the Firestore `issues` collection (separate from PRs), keyed
-by `{repo_safe}_{issue_number}`. Idempotent under re-run.
+by `{repo_safe}_{issue_number}_{week}` so an issue that stays active
+across weeks is snapshotted per week. Idempotent under re-run.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from datetime import date, datetime, timedelta
 import httpx
 
 from code.schemas.issue import IssueRecord, IssueState
-from code.utils.dates import parse_iso_week, previous_iso_week
+from code.utils.dates import parse_iso_week, resolve_target_week
 from code.utils.firestore import build_client
 
 DEFAULT_REPO = "x402-foundation/x402"
@@ -140,9 +141,14 @@ def fetch_active_issues(
 
 
 def doc_id(issue: IssueRecord) -> str:
-    """Firestore document ID for an issue — keyed for idempotency."""
+    """Firestore document ID for an issue — `{repo_safe}_{number}_{week}`.
+
+    The week is part of the key so an issue that stays active across
+    weeks is snapshotted per week, rather than a later week's run
+    overwriting (and dropping) an earlier week's row.
+    """
     repo_safe = issue.repo.replace("/", "__")
-    return f"{repo_safe}_{issue.issue_number}"
+    return f"{repo_safe}_{issue.issue_number}_{issue.week}"
 
 
 def write_to_firestore(issues: list[IssueRecord], project: str | None = None) -> int:
@@ -166,6 +172,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--current",
+        action="store_true",
+        help=(
+            "Target the in-progress ISO week instead of the previous "
+            "one. Used by the daily scheduler to refresh the current "
+            "week's digest; ignored when --week is given."
+        ),
+    )
+    parser.add_argument(
         "--repo",
         default=DEFAULT_REPO,
         help=f"GitHub repository in 'owner/name' form (default: {DEFAULT_REPO}).",
@@ -183,7 +198,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    week = args.week or previous_iso_week()
+    week = resolve_target_week(args.week, args.current)
     start, end = parse_iso_week(week)
     inclusive_end = end - timedelta(days=1)
     print(

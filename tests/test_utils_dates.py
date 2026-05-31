@@ -13,7 +13,13 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from code.utils.dates import parse_iso_week, previous_iso_week, week_of
+from code.utils.dates import (
+    current_iso_week,
+    parse_iso_week,
+    previous_iso_week,
+    resolve_target_week,
+    week_of,
+)
 
 
 class TestParseIsoWeek:
@@ -81,3 +87,51 @@ class TestWeekOf:
     def test_year_boundary_iso_week_one(self) -> None:
         # 2025-12-29 (Mon) is the start of 2026-W01 in ISO terms.
         assert week_of(datetime(2025, 12, 29, 0, 0, tzinfo=timezone.utc)) == "2026-W01"
+
+
+class TestCurrentIsoWeek:
+    """The complement of `previous_iso_week`: the run picks the week it
+    is running in, so an intra-week trigger refreshes the in-progress
+    digest instead of re-indexing the closed one."""
+
+    def test_from_monday_returns_that_week(self) -> None:
+        # Mon 2026-05-11 is the start of W20.
+        assert current_iso_week(today=date(2026, 5, 11)) == "2026-W20"
+
+    def test_from_sunday_returns_same_week(self) -> None:
+        # Sun 2026-05-17 is the end of W20, not the next week.
+        assert current_iso_week(today=date(2026, 5, 17)) == "2026-W20"
+
+    def test_year_boundary(self) -> None:
+        # 2025-12-29 (Mon) is the start of 2026-W01 in ISO terms.
+        assert current_iso_week(today=date(2025, 12, 29)) == "2026-W01"
+
+    def test_default_today_returns_well_formed_label(self) -> None:
+        result = current_iso_week()
+        assert isinstance(result, str)
+        assert "-W" in result
+
+
+class TestResolveTargetWeek:
+    """Precedence: explicit --week > --current > previous (default)."""
+
+    def test_explicit_week_wins_over_current(self) -> None:
+        assert (
+            resolve_target_week("2026-W19", current=True, today=date(2026, 5, 30))
+            == "2026-W19"
+        )
+
+    def test_explicit_week_wins_over_default(self) -> None:
+        assert resolve_target_week("2026-W01", current=False) == "2026-W01"
+
+    def test_current_flag_selects_in_progress_week(self) -> None:
+        # No explicit week, --current set → the week of `today`.
+        assert resolve_target_week(
+            None, current=True, today=date(2026, 5, 28)
+        ) == current_iso_week(today=date(2026, 5, 28))
+
+    def test_default_is_previous_week(self) -> None:
+        # No explicit week, no --current → the previous (closed) week.
+        assert resolve_target_week(
+            None, current=False, today=date(2026, 5, 28)
+        ) == previous_iso_week(today=date(2026, 5, 28))

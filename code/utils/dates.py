@@ -39,6 +39,35 @@ def previous_iso_week(today: date | None = None) -> str:
     return f"{iso_year:04d}-W{iso_week:02d}"
 
 
+def current_iso_week(today: date | None = None) -> str:
+    """Return the ISO week label for the week in progress.
+
+    The complement of `previous_iso_week`: a mid-week Cloud Scheduler
+    trigger picks the week it runs in, so an intra-week run refreshes
+    the digest for the week that is still accumulating rather than
+    re-indexing the one that already closed.
+    """
+    iso_year, iso_week, _ = (today or date.today()).isocalendar()
+    return f"{iso_year:04d}-W{iso_week:02d}"
+
+
+def resolve_target_week(
+    week: str | None, current: bool, today: date | None = None
+) -> str:
+    """Pick the ISO week an indexer run targets.
+
+    Precedence: an explicit `--week` label wins; otherwise `--current`
+    selects the in-progress week; otherwise the default is the previous
+    (just-closed) week. Centralised so every indexer's `--week` /
+    `--current` flags resolve the same way.
+    """
+    if week:
+        return week
+    if current:
+        return current_iso_week(today)
+    return previous_iso_week(today)
+
+
 def week_of(created_at: datetime) -> str:
     """Return the ISO week label (`YYYY-Www`) for a timestamp.
 

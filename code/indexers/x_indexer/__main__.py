@@ -1,9 +1,10 @@
 """CLI entrypoint: `python -m code.indexers.x_indexer`.
 
-Reads tracked handles + `X_BEARER_TOKEN`, runs `run_for_week` for
-either an explicit `--week` or the previous ISO week, and prints the
-summary JSON to stdout. `--dry-run` mirrors the github indexer:
-fetch + report, no Firestore write.
+Reads tracked handles + `X_BEARER_TOKEN`, runs `run_for_week` for the
+week resolved by `resolve_target_week` (explicit `--week` > `--current`
+in-progress week > previous ISO week), and prints the summary JSON to
+stdout. `--dry-run` mirrors the github indexer: fetch + report, no
+Firestore write.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import httpx
 
 from code.indexers.x_indexer.loader import load_tracked_handles
 from code.indexers.x_indexer.orchestrator import run_for_week
-from code.utils.dates import previous_iso_week
+from code.utils.dates import resolve_target_week
 
 
 def main() -> int:
@@ -30,6 +31,15 @@ def main() -> int:
         help=(
             "ISO week label, e.g. '2026-W19'. Defaults to the ISO week "
             "of (today - 7 days), i.e. the previous week."
+        ),
+    )
+    parser.add_argument(
+        "--current",
+        action="store_true",
+        help=(
+            "Target the in-progress ISO week instead of the previous "
+            "one. Used by the daily scheduler to refresh the current "
+            "week's digest; ignored when --week is given."
         ),
     )
     parser.add_argument(
@@ -61,7 +71,7 @@ def main() -> int:
         )
         return 0
 
-    week = args.week or previous_iso_week()
+    week = resolve_target_week(args.week, args.current)
     project = os.getenv("GOOGLE_CLOUD_PROJECT")
     print(
         f"Fetching tweets for {len(handles)} handle(s) over {week} "

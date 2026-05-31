@@ -18,10 +18,13 @@ Run with:
     uv run python -m code.indexers.github_indexer --kind all    --week 2026-W19
 
 Idempotent: re-running for the same week overwrites existing
-documents in place. The document ID is `{repo_safe}_{pr_number}`, so
-a PR that surfaces under multiple kinds in the same run ends up with
-the row written last (the CLI orders `all` as active → new → merged,
-so a merged-this-week PR ends up labelled `kind=merged`).
+documents in place. The document ID is `{repo_safe}_{pr_number}_{week}`
+— the week is part of the key so a PR that stays active across weeks is
+snapshotted per week rather than overwriting an earlier week's row. The
+kind is not in the key, so a PR that surfaces under multiple kinds in
+the same week converges on the row written last (the CLI orders `all`
+as active → new → merged, so a merged-this-week PR ends up labelled
+`kind=merged`).
 
 The Search API is called unauthenticated by default (10 req/min,
 ample for a weekly run). Set `GITHUB_TOKEN` or `GH_TOKEN` for the
@@ -40,7 +43,7 @@ from typing import Literal
 import httpx
 
 from code.schemas.pr import PRRecord, PRStatus
-from code.utils.dates import parse_iso_week, previous_iso_week, week_of
+from code.utils.dates import parse_iso_week, resolve_target_week, week_of
 from code.utils.firestore import build_client
 
 DEFAULT_REPO = "x402-foundation/x402"
@@ -187,15 +190,18 @@ def fetch_prs(
 
 
 def doc_id(pr: PRRecord) -> str:
-    """Firestore document ID for a PR — keyed for idempotency.
+    """Firestore document ID for a PR — `{repo_safe}_{pr_number}_{week}`.
 
-    The kind is intentionally left out: a PR that crosses kinds within
-    the same week (e.g. active early in the week, merged on Friday)
-    should converge on a single row with the latest status, not two
-    rivalling docs.
+    The kind is left out so a PR that crosses kinds within the same
+    week (active early in the week, merged on Friday) converges on a
+    single row with the latest status, not two rivalling docs. The week
+    is part of the key so a PR that stays active across weeks is
+    snapshotted per week: without it a later week's run would rewrite
+    an earlier week's row's `week` field and drop it from that week's
+    digest (the readers filter by `week`).
     """
     repo_safe = pr.repo.replace("/", "__")
-    return f"{repo_safe}_{pr.pr_number}"
+    return f"{repo_safe}_{pr.pr_number}_{pr.week}"
 
 
 def write_to_firestore(prs: list[PRRecord], project: str | None = None) -> int:
@@ -222,6 +228,15 @@ def main() -> int:
         help=(
             "ISO week label, e.g. '2026-W19'. Defaults to the ISO week "
             "of (today - 7 days), i.e. the previous week."
+        ),
+    )
+    parser.add_argument(
+        "--current",
+        action="store_true",
+        help=(
+            "Target the in-progress ISO week instead of the previous "
+            "one. Used by the daily scheduler to refresh the current "
+            "week's digest; ignored when --week is given."
         ),
     )
     parser.add_argument(
@@ -255,7 +270,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    week = args.week or previous_iso_week()
+    week = resolve_target_week(args.week, args.current)
     start, end = parse_iso_week(week)
     inclusive_end = end - timedelta(days=1)
 
