@@ -25,7 +25,7 @@ from datetime import date, datetime, timedelta
 import httpx
 
 from code.schemas.issue import IssueRecord, IssueState
-from code.utils.dates import parse_iso_week, previous_iso_week
+from code.utils.dates import parse_iso_week, resolve_target_week
 from code.utils.firestore import build_client
 
 DEFAULT_REPO = "x402-foundation/x402"
@@ -166,6 +166,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--current",
+        action="store_true",
+        help=(
+            "Target the in-progress ISO week instead of the previous "
+            "one. Used by the daily scheduler to refresh the current "
+            "week's digest; ignored when --week is given."
+        ),
+    )
+    parser.add_argument(
         "--repo",
         default=DEFAULT_REPO,
         help=f"GitHub repository in 'owner/name' form (default: {DEFAULT_REPO}).",
@@ -183,7 +192,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    week = args.week or previous_iso_week()
+    week = resolve_target_week(args.week, args.current)
     start, end = parse_iso_week(week)
     inclusive_end = end - timedelta(days=1)
     print(
