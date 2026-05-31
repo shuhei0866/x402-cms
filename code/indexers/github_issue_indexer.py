@@ -11,7 +11,8 @@ Run with:
     uv run python -m code.indexers.github_issue_indexer --week 2026-W19 --min-comments 3
 
 Stored in the Firestore `issues` collection (separate from PRs), keyed
-by `{repo_safe}_{issue_number}`. Idempotent under re-run.
+by `{repo_safe}_{issue_number}_{week}` so an issue that stays active
+across weeks is snapshotted per week. Idempotent under re-run.
 """
 
 from __future__ import annotations

@@ -18,10 +18,13 @@ Run with:
     uv run python -m code.indexers.github_indexer --kind all    --week 2026-W19
 
 Idempotent: re-running for the same week overwrites existing
-documents in place. The document ID is `{repo_safe}_{pr_number}`, so
-a PR that surfaces under multiple kinds in the same run ends up with
-the row written last (the CLI orders `all` as active → new → merged,
-so a merged-this-week PR ends up labelled `kind=merged`).
+documents in place. The document ID is `{repo_safe}_{pr_number}_{week}`
+— the week is part of the key so a PR that stays active across weeks is
+snapshotted per week rather than overwriting an earlier week's row. The
+kind is not in the key, so a PR that surfaces under multiple kinds in
+the same week converges on the row written last (the CLI orders `all`
+as active → new → merged, so a merged-this-week PR ends up labelled
+`kind=merged`).
 
 The Search API is called unauthenticated by default (10 req/min,
 ample for a weekly run). Set `GITHUB_TOKEN` or `GH_TOKEN` for the
