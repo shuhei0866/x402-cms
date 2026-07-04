@@ -73,9 +73,11 @@ def read_prs_by_kind(
     the rows the multi-kind indexer labels `active` (open/draft PRs
     with live discussion) or `new` (opened this week). Those rows have
     no `merged_at`, so they rehydrate into `PRRecord` rather than the
-    merged-only `MergedPR` view. Sorted newest-first on the timestamp
-    the kind keys on — `updated_at` for active, `created_at` for new —
-    with a min-sentinel so a missing timestamp sorts last.
+    merged-only `MergedPR` view. Active rows sort most-discussed first
+    (comment count, newest `updated_at` as tiebreak — the same rule as
+    `read_issues_for_week`, so both discussion sections read hottest
+    first). New rows sort newest-first on `created_at`. A min-sentinel
+    keeps a missing timestamp at the bottom of its bucket.
     """
     fs = build_client(client, project)
     docs = (
@@ -90,8 +92,12 @@ def read_prs_by_kind(
             continue
         records.append(PRRecord.model_validate(data))
     _floor = datetime.min.replace(tzinfo=timezone.utc)
-    sort_attr = "updated_at" if kind == "active" else "created_at"
-    records.sort(key=lambda r: getattr(r, sort_attr) or _floor, reverse=True)
+    if kind == "active":
+        records.sort(
+            key=lambda r: (r.comments, r.updated_at or _floor), reverse=True
+        )
+    else:
+        records.sort(key=lambda r: r.created_at or _floor, reverse=True)
     return records
 
 

@@ -2,9 +2,10 @@
 
 `read_prs_by_kind` reads the same `source_data` collection as
 `read_week` but keeps only the rows the indexer labels `active` / `new`
-(those carry no `merged_at`, so they rehydrate as `PRRecord`). It sorts
-on the timestamp the kind keys on. `read_issues_for_week` reads the
-separate `issues` collection, most-discussed first.
+(those carry no `merged_at`, so they rehydrate as `PRRecord`). Active
+rows sort most-discussed first, new rows newest-first.
+`read_issues_for_week` reads the separate `issues` collection,
+most-discussed first.
 
 The client is a MagicMock, as in `test_renderer_read`: the tests pin
 the collection name and the in-memory sort without a live Firestore.
@@ -48,6 +49,7 @@ def _pr(
     status: str = "open",
     updated_at: datetime | None = None,
     created_at: datetime | None = None,
+    comments: int = 4,
 ) -> dict:
     return {
         "repo": "x402-foundation/x402",
@@ -61,7 +63,7 @@ def _pr(
         "merged_at": None,
         "updated_at": updated_at.isoformat() if updated_at else None,
         "created_at": created_at.isoformat() if created_at else None,
-        "comments": 4,
+        "comments": comments,
         "labels": [],
     }
 
@@ -98,16 +100,19 @@ class TestReadPrsByKind:
         assert {p.pr_number for p in prs} == {1, 3}
         client.collection.assert_called_once_with(COLLECTION)
 
-    def test_active_sorted_by_updated_at_desc(self) -> None:
+    def test_active_sorted_most_discussed_first(self) -> None:
+        # Comment count is the primary key; newest `updated_at` breaks
+        # ties — the same rule as issues, so both discussion sections
+        # read hottest-first.
         client = _client_returning(
             [
-                _pr(1, kind="active", updated_at=D1),
-                _pr(2, kind="active", updated_at=D3),
-                _pr(3, kind="active", updated_at=D2),
+                _pr(1, kind="active", comments=3, updated_at=D3),
+                _pr(2, kind="active", comments=24, updated_at=D1),
+                _pr(3, kind="active", comments=3, updated_at=D1),
             ]
         )
         prs = read_prs_by_kind("2026-W19", "active", client=client)
-        assert [p.pr_number for p in prs] == [2, 3, 1]
+        assert [p.pr_number for p in prs] == [2, 1, 3]
 
     def test_new_sorted_by_created_at_desc(self) -> None:
         client = _client_returning(

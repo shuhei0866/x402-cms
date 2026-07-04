@@ -35,7 +35,13 @@ def _pr(
     )
 
 
-def _post(post_id: str, *, text: str = "tweet", handle: str = "DukeOphir") -> XPost:
+def _post(
+    post_id: str,
+    *,
+    text: str = "tweet",
+    handle: str = "DukeOphir",
+    reply_to: str | None = None,
+) -> XPost:
     return XPost(
         post_id=post_id,
         author_handle=handle,
@@ -44,6 +50,7 @@ def _post(post_id: str, *, text: str = "tweet", handle: str = "DukeOphir") -> XP
         text=text,
         url=f"https://x.com/{handle}/status/{post_id}",
         week="2026-W19",
+        in_reply_to_id=reply_to,
     )
 
 
@@ -126,3 +133,58 @@ class TestRenderHtml:
         html = render_html(_bundle())
         assert "<main>" in html
         assert "</main>" in html
+
+
+class TestInformationDesign:
+    """Snapshot line, section order, and the reply / closed folds."""
+
+    def test_snapshot_line_summarises_the_week(self) -> None:
+        html = render_html(
+            _bundle(
+                prs=[_pr(1)],
+                x_posts=[_post("1"), _post("2", reply_to="1")],
+            )
+        )
+        assert (
+            "1 merged · 0 active discussions · 0 newly opened · "
+            "0 issues · 1 X posts + 1 replies"
+        ) in html
+
+    def test_discussion_sections_come_before_merged(self) -> None:
+        # Inverted pyramid: the hottest, still-live material reads
+        # first; settled material (merged) follows.
+        html = render_html(_bundle())
+        active = html.index("<h2>Active discussions")
+        issues = html.index("<h2>Issues")
+        merged = html.index("<h2>Merged PRs")
+        assert active < issues < merged
+
+    def test_replies_fold_into_per_handle_details(self) -> None:
+        posts = [
+            _post("1", text="top-level note", handle="alice"),
+            _post("2", text="first reply", handle="bob", reply_to="1"),
+            _post("3", text="second reply", handle="bob", reply_to="1"),
+        ]
+        html = render_html(_bundle(x_posts=posts))
+        assert "<summary>Replies from @bob (2)</summary>" in html
+        # The top-level post stays in the visible list, above the fold.
+        assert html.index("top-level note") < html.index("<details>")
+        assert html.index("first reply") > html.index("<details>")
+
+    def test_reply_folds_ordered_largest_first(self) -> None:
+        posts = [
+            _post("2", handle="alice", reply_to="1"),
+            _post("3", handle="bob", reply_to="1"),
+            _post("4", handle="bob", reply_to="1"),
+        ]
+        html = render_html(_bundle(x_posts=posts))
+        assert html.index("Replies from @bob (2)") < html.index(
+            "Replies from @alice (1)"
+        )
+
+    def test_only_replies_still_render_explicit_top_level_empty_line(
+        self,
+    ) -> None:
+        html = render_html(_bundle(x_posts=[_post("2", reply_to="1")]))
+        assert "No top-level posts this week." in html
+        assert "Replies from @DukeOphir (1)" in html
