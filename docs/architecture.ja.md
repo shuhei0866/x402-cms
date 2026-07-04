@@ -8,7 +8,10 @@ HTML、AI agent には HTTP 402 + x402 プロトコル経由で有料 JSON。
 
 Phase 0〜4 が本番稼働中。Phase 5 (mainnet 化 + batch-settlement scheme への
 切替) はロードマップに残っている。現状の決済は **Base Sepolia testnet の
-USDC** を `x402.org/facilitator` 経由で扱う。
+USDC** を `x402.org/facilitator` 経由で扱う。人間向け view は情報設計を
+一巡済み: ファーストビューのダッシュボード (This week at a glance)、
+議論が熱い順のセクション構成、量の多い content の機械的な折りたたみ、
+ページ内ナビゲーションを備える。
 
 ## 1. システム全体像
 
@@ -31,13 +34,15 @@ graph TB
   end
 
   subgraph FS["Firestore (renderer の唯一の read 面)"]
-    SrcCol["source_data<br/>(merged PRs)"]
+    SrcCol["source_data<br/>(PRs: merged / active / new)"]
+    IssueCol["issues<br/>(活発な議論)"]
     XCol["x_posts<br/>(tweets)"]
     CommCol["commentary<br/>(Shuhei の解釈)"]
   end
 
-  subgraph Jobs["Cloud Run Jobs (週次・月 09:00 JST)"]
+  subgraph Jobs["Cloud Run Jobs (週次・月 + 日次、09:00 JST)"]
     GHJob["x402-cms-indexer<br/>httpx + GitHub Search"]
+    IssueJob["x402-cms-issue-indexer<br/>httpx + GitHub Search"]
     XJob["x402-cms-x-indexer<br/>httpx + X API v2"]
   end
 
@@ -54,6 +59,7 @@ graph TB
   subgraph Sec["Secret Manager"]
     Bearer["x402-cms-x-bearer"]
     Handles["x402-cms-tracked-handles<br/>(curated handles + clusters)"]
+    Topics["x402-cms-topics<br/>(scope/keyword → category 対応表)"]
   end
 
   subgraph Off["Off-chain"]
@@ -70,18 +76,23 @@ graph TB
   Agent --> Dispatch
 
   Bundle --> SrcCol
+  Bundle --> IssueCol
   Bundle --> XCol
   Bundle --> CommCol
   Handles -.->|"file mount"| Service
+  Topics -.->|"file mount"| Service
 
   GHJob --> GitHub
   GHJob --> SrcCol
+  IssueJob --> GitHub
+  IssueJob --> IssueCol
   XJob --> XAPI
   XJob --> XCol
   Bearer -.->|"env var"| XJob
   Handles -.->|"file mount"| XJob
 
   Reindex -.->|"trigger"| GHJob
+  Reindex -.->|"trigger"| IssueJob
   Reindex -.->|"trigger"| XJob
   Survey -.->|"read-only"| FS
   VaultDir -->|"manual"| Publish
@@ -96,13 +107,22 @@ graph TB
 - **同じ URL を User-Agent で振り分け**。`code/dispatch.py` がブラウザ
   marker (Mozilla / Chrome / Safari / …) を小さなホワイトリストで判定し、
   それ以外はデフォルトで agent 経路に流す。
-- **リクエスト時の read 面は Firestore に閉じる**。3 collection、間に
-  cache を置かない。GitHub / X を叩くのは weekly Job だけで、Service は
-  render 時に外部 API を呼ばない。
-- **curation は 1 ファイル、2 か所に mount**。Service と X indexer Job
-  の両方が同じ Secret Manager (`x402-cms-tracked-handles`) を
-  `/secrets/tracked_handles.yaml` で読むので、renderer の cluster 分類と
-  indexer の fetch handle 集合がずれない。
+- **リクエスト時の read 面は Firestore に閉じる**。4 collection、間に
+  cache を置かない。GitHub / X を叩くのは Job だけで (週次が先週を確定し、
+  日次が `--current` で進行中の週を更新する)、Service は render 時に
+  外部 API を呼ばない。
+- **curation はコードではなくファイルが持つ**。Service と X indexer Job
+  は同じ Secret Manager (`x402-cms-tracked-handles`) を読み、Service は
+  加えて `x402-cms-topics` を mount する。cluster 分類、fetch handle
+  集合、glance の topic 分布が curation ファイルとずれることはない。
+- **人間向け view は逆ピラミッド + 機械的折りたたみ**。ファーストビューに
+  ダッシュボード (誰が動いたか / 何が注目か / どの領域の話か) を置き、
+  議論セクションは comments 数の多い順に並べ、閉じられた新規 PR と
+  リプライは `<details>` に畳む。並べ替えと折りたたみの規則はすべて機械的
+  (リプライか否か、open か closed か、comments 数、時系列) で、engagement
+  指標 (likes) は意図的にソートに使わない。topic 分布は curated な
+  `topics.yaml` への表引きであり、**対応表そのものが編集行為、renderer は
+  数えるだけ**。
 - **LLM は judgment の下流にのみ入る**。`/x402-survey` は retrieval +
   clustering まで。observation と hypothesis は常に Shuhei が手で先に
   書く (Phase 4 の設計原則)。
@@ -148,13 +168,16 @@ flowchart LR
 
   subgraph Ingest["Ingest"]
     direction TB
-    Cron["Cloud Scheduler<br/>月 09:00 JST"]
+    Cron["Cloud Scheduler<br/>週次・月 + 日次<br/>09:00 JST"]
     Manual["/x402-reindex<br/>週中"]
-    GHJob["github_indexer Job"]
+    GHJob["github_indexer Job<br/>(merged / active / new)"]
+    IssJob["issue_indexer Job"]
     XJob["x_indexer Job"]
     Cron --> GHJob
+    Cron --> IssJob
     Cron --> XJob
     Manual --> GHJob
+    Manual --> IssJob
     Manual --> XJob
   end
 
@@ -169,6 +192,7 @@ flowchart LR
 
   subgraph FS["Firestore"]
     Srcd["source_data"]
+    Iss["issues"]
     Xp["x_posts"]
     Cm["commentary"]
   end
@@ -180,10 +204,12 @@ flowchart LR
   end
 
   GH --> GHJob --> Srcd
+  GH --> IssJob --> Iss
   XAPI --> XJob --> Xp
   PubSkill --> Cm
 
   Srcd --> Bundle
+  Iss --> Bundle
   Xp --> Bundle
   Cm --> Bundle
   Bundle --> HTML
@@ -210,77 +236,89 @@ graph TB
       Service["Cloud Run Service<br/>x402-cms<br/>min-instances=1"]
       Job1["Cloud Run Job<br/>x402-cms-indexer"]
       Job2["Cloud Run Job<br/>x402-cms-x-indexer"]
-      Sched1["Scheduler<br/>x402-cms-indexer-weekly"]
-      Sched2["Scheduler<br/>x402-cms-x-indexer-weekly"]
+      Job3["Cloud Run Job<br/>x402-cms-issue-indexer"]
+      Sched["Schedulers ×6<br/>Job ごとに週次・月 + 日次"]
     end
 
     subgraph SAs["Service Accounts"]
       Runner["x402-cms-runner<br/>(Firestore + Secret reader)"]
-      Schler["x402-cms-scheduler<br/>(run.invoker)"]
+      Schler["x402-cms-scheduler<br/>(run.invoker +<br/>jobs.runWithOverrides)"]
     end
 
     subgraph SM["Secret Manager"]
       BS["x402-cms-x-bearer"]
       HS["x402-cms-tracked-handles"]
+      TS["x402-cms-topics"]
     end
 
-    FSdb[("Firestore<br/>3 collections")]
+    FSdb[("Firestore<br/>4 collections")]
   end
 
-  Sched1 -->|"oauth"| Job1
-  Sched2 -->|"oauth"| Job2
+  Sched -->|"oauth"| Job1
+  Sched -->|"oauth"| Job2
+  Sched -->|"oauth"| Job3
 
   Job1 --> FSdb
   Job2 --> FSdb
+  Job3 --> FSdb
   Service --> FSdb
 
   BS -.->|"env var"| Job2
   HS -.->|"file mount"| Job2
-  HS -.->|"file mount"| Service
+  HS -.->|"file mount /secrets"| Service
+  TS -.->|"file mount /topics"| Service
 
   Runner -.- Service
   Runner -.- Job1
   Runner -.- Job2
-  Schler -.- Sched1
-  Schler -.- Sched2
+  Runner -.- Job3
+  Schler -.- Sched
 ```
 
 - **Service と Jobs の使い分け**。Service は常時起動 (`min-instances=1`、
-  cold start を回避)。Jobs は短命 (X indexer は 10〜20 秒で完走)。
+  cold start を回避)。Jobs は短命 (X indexer は 10〜20 秒で完走)。各 Job
+  は 2 本の schedule を持つ: 週次・月曜の run が先週を確定し、日次の run
+  が `--current` の args override で進行中の週を更新する。
 - **2 つの SA、権限は狭く**。`x402-cms-runner` は `datastore.user` +
-  対象 secret への `secretAccessor` のみ。`x402-cms-scheduler` は対象
-  2 Jobs への `run.invoker` のみ (プロジェクト広域ではない)。
-- **token と handles で mount スタイルが違う**。`X_BEARER_TOKEN` は
-  文字列なので env var として mount。handles yaml は構造データなので
-  `/secrets/tracked_handles.yaml` に file mount し、Service と X Job
-  の双方が `--handles-config` でその path を指す (loader のコードは
-  local dev と同じまま動く)。
+  対象 3 secret への `secretAccessor` のみ。`x402-cms-scheduler` は対象
+  3 Jobs への `run.invoker` に加え、最小のカスタムロール
+  (`run.jobs.runWithOverrides`) を持つ — 日次 trigger が args override を
+  渡すには素の invoker では足りないためである。
+- **token と curated file で mount スタイルが違う**。`X_BEARER_TOKEN` は
+  文字列なので env var として mount。curated yaml は file mount で、
+  Cloud Run は 1 つの mount ディレクトリに 1 secret しか置けないため、
+  handles は `/secrets/tracked_handles.yaml`、topics は
+  `/topics/topics.yaml` に分かれる (loader のコードは local dev と
+  同じまま、path だけが違う)。
 
 ## 5. モジュールマップ
 
-refactor 後 (2026-05-27)。
-
 ```
 code/
-├── schemas/                  {pr, x_post, commentary}.py · Pydantic models
+├── schemas/                  {pr, issue, x_post, commentary}.py · Pydantic
 ├── utils/
-│   ├── dates.py              parse_iso_week, previous_iso_week, week_of
+│   ├── dates.py              parse_iso_week, previous/current_iso_week,
+│   │                         resolve_target_week, week_of, shift_iso_week
 │   └── firestore.py          build_client (inject > project > ADC)
 ├── indexers/
-│   ├── github_indexer.py     httpx + GitHub Search API
+│   ├── github_indexer.py     多種別 PR indexer (merged / active / new)
+│   ├── github_issue_indexer.py  活発 issue の indexer (issues collection)
 │   ├── x_text_parser.py      parse_pr_references
-│   └── x_indexer/            (5 ファイル、旧 424 行モノリスを分解)
+│   └── x_indexer/            (5 ファイル package)
 │       ├── _http.py          API client + tweet → XPost 正規化
 │       ├── loader.py         tracked_handles.yaml (flat / clusters 両対応)
 │       ├── writer.py         x_posts upserter
 │       ├── orchestrator.py   週単位の resolve → fetch → write
 │       └── __main__.py       CLI
 ├── renderers/
-│   └── digest/               (4 ファイル、旧 428 行モノリスを分解)
-│       ├── readers.py        3 つの Firestore reader
+│   └── digest/
+│       ├── readers.py        5 つの Firestore reader (議論系は
+│       │                     comments 数の多い順で返す)
 │       ├── bundle.py         DigestBundle, cross-refs, recommendations,
 │       │                     JP cluster filter
-│       ├── html.py           render_html
+│       ├── topics.py         curated な scope/keyword → category 表引き
+│       ├── html.py           render_html: glance ダッシュボード、
+│       │                     折りたたみ、セクション nav + 週リンク
 │       └── agent_json.py     render_agent_payload
 ├── publish/
 │   ├── vault_parser.py       frontmatter 解析 + Commentary 構築
@@ -288,18 +326,24 @@ code/
 ├── survey/
 │   └── surveyor.py           /x402-survey のバックエンド (Markdown 出力)
 ├── server/
-│   └── main.py               FastAPI app + ServerConfig + handler
+│   ├── main.py               FastAPI app + ServerConfig + handler
+│   └── static/               vendor した pico.classless.min.css (MIT)
 ├── dispatch.py               User-Agent で human / agent を振り分け
 └── observability.py          構造化 JSON アクセスログ
 
 scripts/
-├── deploy.sh                 Service デプロイ (handles secret を mount)
+├── deploy.sh                 Service デプロイ (handles + topics を mount)
 ├── deploy_job.sh             github_indexer Job
-├── deploy_x_job.sh           x_indexer Job (両 secret を mount)
+├── deploy_issue_job.sh       issue_indexer Job
+├── deploy_x_job.sh           x_indexer Job (bearer + handles を mount)
 ├── setup_sa.sh               runtime SA
-├── setup_secrets.sh          bearer + handles secret (idempotent)
-├── setup_scheduler.sh        GitHub indexer Scheduler
-├── setup_x_scheduler.sh      X indexer Scheduler
+├── setup_secrets.sh          bearer + handles + topics (idempotent)
+├── setup_scheduler.sh        GitHub indexer の週次 Scheduler
+├── setup_issue_scheduler.sh  issue indexer の週次 Scheduler
+├── setup_x_scheduler.sh      X indexer の週次 Scheduler
+├── setup_daily_schedulers.sh 日次 --current trigger + カスタムロール
+├── check_no_attribution.sh   pre-commit ガード (メタ記述の検出)
+├── check_semantic.py         pre-commit ガード (LLM 層)
 └── dogfood_payment_loop.py   buyer 側 smoke (Base Sepolia)
 ```
 
@@ -317,13 +361,14 @@ Claude Code 用スキル 3 本は本リポジトリ外、`~/.claude/skills/` 配
 graph TB
   subgraph PubOSS["Public (本リポジトリ、commit 済み)"]
     Code["code/ · scripts/ · tests/"]
-    OSSCfg["config/tracked_handles.example.yaml"]
+    OSSCfg["config/*.example.yaml<br/>(handles, topics)"]
     OSSPrompt["prompts/*.example.md"]
     Infra["Dockerfile · pyproject.toml"]
   end
 
   subgraph Repo["Private (本リポジトリ、gitignored)"]
-    RealHandles["config/tracked_handles.yaml<br/>(curated 12 handles + clusters)"]
+    RealHandles["config/tracked_handles.yaml<br/>(curated handles + clusters)"]
+    RealTopics["config/topics.yaml<br/>(scope/keyword → category)"]
     RealPrompts["prompts/*.md"]
     Env[".env"]
   end
@@ -335,9 +380,11 @@ graph TB
   subgraph Runtime["Runtime (Secret Manager)"]
     SecBearer["x402-cms-x-bearer"]
     SecHandles["x402-cms-tracked-handles"]
+    SecTopics["x402-cms-topics"]
   end
 
   RealHandles -.->|"scripts/setup_secrets.sh"| SecHandles
+  RealTopics -.->|"scripts/setup_secrets.sh"| SecTopics
   Env -.->|"X_BEARER_TOKEN の値"| SecBearer
   VaultPath -.->|"/x402-publish"| Code
 ```
@@ -345,10 +392,11 @@ graph TB
 リポジトリは公開だが、curator の judgement レイヤは 3 つの private 面に
 分かれている:
 
-- **本リポジトリ内、gitignored**: curated handle list 本体、working
-  prompts、`.env`。commit 済みの `.example.yaml` / `.example.md` は
-  fresh clone が live X API に対して即座に動く template を担う。
+- **本リポジトリ内、gitignored**: curated handle list 本体、topic 対応表、
+  working prompts、`.env`。commit 済みの `.example.yaml` / `.example.md`
+  は、fresh clone が live X API に対して即座に動き topic 分布も描ける
+  template を担う。
 - **別リポジトリ**: vault。commentary draft と編集履歴はそこに住む。
-- **Secret Manager**: 本番 X bearer token と curated handle yaml。
-  Service + Job が起動時に mount する。どちらも `--set-env-vars` には
-  載せない (Cloud Audit Logs / Cloud Build log への漏洩を防ぐ)。
+- **Secret Manager**: 本番 X bearer token と 2 つの curated yaml。
+  Service + Jobs が起動時に mount する。いずれの値も `--set-env-vars`
+  には載せない (Cloud Audit Logs / Cloud Build log への漏洩を防ぐ)。
