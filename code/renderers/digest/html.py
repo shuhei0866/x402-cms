@@ -1,10 +1,18 @@
 """Human HTML view.
 
-Order: week preface (prose, only if a week-level note exists) →
-Picks (ranked <ol>) → Merged PRs → Active discussions → Newly opened →
-Issues → X posts → Japan community → Cross-references → end Commentary
-section (multi-target notes, anchored). Single-target notes are inlined
-as a <blockquote> on their PR / X item.
+Order: week snapshot line → week preface (prose, only if a week-level
+note exists) → Picks (ranked <ol>) → Active discussions → Issues (both
+most-discussed first) → Merged PRs → Newly opened (still-open rows
+visible, closed rows folded) → X posts → Japan community (top-level
+posts visible, replies folded per handle) → Cross-references → end
+Commentary section (multi-target notes, anchored). Single-target notes
+are inlined as a <blockquote> on their PR / X item.
+
+The ordering and folding rules are all mechanical (reply-or-not,
+open-or-closed, comment counts, recency) — anything that *says* what
+matters belongs to the commentary layer, not the renderer. Engagement
+sorting (likes) is deliberately not used: it tracks follower count,
+not signal.
 
 Markdown is converted with markdown-it-py (raw HTML disabled, the
 commonmark default) and then nh3-sanitised. The sanitiser only runs
@@ -127,6 +135,83 @@ def _html_cross_item(cr: CrossReference) -> str:
     return f"<li>{escape(cr.pr_ref)} — mentioned by X post id(s): {post_ids_html}</li>"
 
 
+def _split_top_level(posts: list[XPost]) -> tuple[list[XPost], list[XPost]]:
+    """Split posts into top-level entries and replies.
+
+    Replies routinely dominate the raw feed (three quarters of a
+    typical week), so this split is what keeps the section scannable.
+    """
+    top = [p for p in posts if p.in_reply_to_id is None]
+    replies = [p for p in posts if p.in_reply_to_id is not None]
+    return top, replies
+
+
+def _posts_section_body(
+    posts: list[XPost],
+    single_idx: dict[str, list[Commentary]],
+    empty_message: str,
+) -> str:
+    """Top-level posts as a visible list; replies folded per handle.
+
+    Reply folds are ordered largest-first so the handles carrying the
+    most conversation bulk are the easiest to audit. Everything stays
+    on the page — folding hides, it never drops.
+    """
+    top, replies = _split_top_level(posts)
+    if top:
+        top_items = "\n".join(_html_x_item(p, single_idx) for p in top)
+    elif replies:
+        top_items = "<li>No top-level posts this week.</li>"
+    else:
+        top_items = f"<li>{empty_message}</li>"
+    body = f"<ul>\n{top_items}\n</ul>"
+
+    by_handle: dict[str, list[XPost]] = {}
+    for post in replies:
+        by_handle.setdefault(post.author_handle, []).append(post)
+    for handle, handle_posts in sorted(
+        by_handle.items(), key=lambda kv: len(kv[1]), reverse=True
+    ):
+        items = "\n".join(_html_x_item(p, single_idx) for p in handle_posts)
+        body += (
+            f"\n<details><summary>Replies from @{escape(handle)} "
+            f"({len(handle_posts)})</summary>\n<ul>\n{items}\n</ul>\n</details>"
+        )
+    return body
+
+
+def _new_prs_section_body(
+    new_prs: list[PRRecord],
+    single_idx: dict[str, list[Commentary]],
+) -> str:
+    """Still-open newcomers as a visible list; closed ones folded.
+
+    A large share of newly opened PRs is closed within days (the
+    ecosystem-listing wave), so only rows that can still be engaged
+    with earn a visible slot.
+    """
+    open_rows = [p for p in new_prs if p.status in ("open", "draft")]
+    closed_rows = [p for p in new_prs if p.status not in ("open", "draft")]
+    if open_rows:
+        open_items = "\n".join(
+            _html_pr_record_item(p, single_idx) for p in open_rows
+        )
+    elif closed_rows:
+        open_items = "<li>No still-open PRs this week.</li>"
+    else:
+        open_items = "<li>No newly opened PRs this week.</li>"
+    body = f"<ul>\n{open_items}\n</ul>"
+    if closed_rows:
+        closed_items = "\n".join(
+            _html_pr_record_item(p, single_idx) for p in closed_rows
+        )
+        body += (
+            f"\n<details><summary>Closed without merge ({len(closed_rows)})"
+            f"</summary>\n<ul>\n{closed_items}\n</ul>\n</details>"
+        )
+    return body
+
+
 def render_html(bundle: DigestBundle) -> str:
     """Render the human-facing HTML view for a digest week."""
     single_idx = _single_target_index(bundle.commentaries)
@@ -154,22 +239,29 @@ def render_html(bundle: DigestBundle) -> str:
     active_items = "\n".join(
         _html_pr_record_item(pr, single_idx) for pr in bundle.active_prs
     ) or "<li>No active discussions this week.</li>"
-    new_items = "\n".join(
-        _html_pr_record_item(pr, single_idx) for pr in bundle.new_prs
-    ) or "<li>No newly opened PRs this week.</li>"
+    new_body = _new_prs_section_body(bundle.new_prs, single_idx)
     issue_items = "\n".join(
         _html_issue_item(i) for i in bundle.issues
     ) or "<li>No active issues this week.</li>"
-    x_items = "\n".join(
-        _html_x_item(p, single_idx) for p in bundle.x_posts
-    ) or "<li>No X posts this week.</li>"
+    x_body = _posts_section_body(
+        bundle.x_posts, single_idx, "No X posts this week."
+    )
 
     jp_posts = posts_in_cluster(
         bundle.x_posts, bundle.handle_clusters, JAPAN_CLUSTER
     )
-    jp_items = "\n".join(
-        _html_x_item(p, single_idx) for p in jp_posts
-    ) or "<li>No Japan community posts this week.</li>"
+    jp_body = _posts_section_body(
+        jp_posts, single_idx, "No Japan community posts this week."
+    )
+
+    top_posts, reply_posts = _split_top_level(bundle.x_posts)
+    snapshot = (
+        f"{len(bundle.prs)} merged · "
+        f"{len(bundle.active_prs)} active discussions · "
+        f"{len(bundle.new_prs)} newly opened · "
+        f"{len(bundle.issues)} issues · "
+        f"{len(top_posts)} X posts + {len(reply_posts)} replies"
+    )
 
     cross_items = "\n".join(
         _html_cross_item(cr) for cr in bundle.cross_references
@@ -201,23 +293,14 @@ def render_html(bundle: DigestBundle) -> str:
 <body>
 <main>
 <h1>{escape(bundle.repo)} — digest {escape(bundle.week)}</h1>
+<p>{snapshot}</p>
 {preface}
 <h2>Picks ({len(picks)})</h2>
 {picks_html}
 
-<h2>Merged PRs ({len(bundle.prs)})</h2>
-<ul>
-{pr_items}
-</ul>
-
 <h2>Active discussions ({len(bundle.active_prs)})</h2>
 <ul>
 {active_items}
-</ul>
-
-<h2>Newly opened ({len(bundle.new_prs)})</h2>
-<ul>
-{new_items}
 </ul>
 
 <h2>Issues ({len(bundle.issues)})</h2>
@@ -225,15 +308,19 @@ def render_html(bundle: DigestBundle) -> str:
 {issue_items}
 </ul>
 
-<h2>X posts ({len(bundle.x_posts)})</h2>
+<h2>Merged PRs ({len(bundle.prs)})</h2>
 <ul>
-{x_items}
+{pr_items}
 </ul>
 
+<h2>Newly opened ({len(bundle.new_prs)})</h2>
+{new_body}
+
+<h2>X posts ({len(bundle.x_posts)})</h2>
+{x_body}
+
 <h2>Japan community ({len(jp_posts)})</h2>
-<ul>
-{jp_items}
-</ul>
+{jp_body}
 
 <h2>Cross-references ({len(bundle.cross_references)})</h2>
 <ul>

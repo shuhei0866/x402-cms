@@ -34,7 +34,7 @@ def _active(number: int) -> PRRecord:
     )
 
 
-def _new(number: int) -> PRRecord:
+def _new(number: int, *, status: str = "open") -> PRRecord:
     return PRRecord(
         repo="x402-foundation/x402",
         pr_number=number,
@@ -42,7 +42,7 @@ def _new(number: int) -> PRRecord:
         author="someone",
         url=f"https://github.com/x402-foundation/x402/pull/{number}",
         week="2026-W19",
-        status="open",
+        status=status,
         kind="new",
         created_at=D,
     )
@@ -105,6 +105,21 @@ class TestSectionsRender:
         assert "No active discussions this week." in html
         assert "No newly opened PRs this week." in html
         assert "No active issues this week." in html
+
+    def test_new_closed_rows_fold_into_details(self) -> None:
+        # Newly opened PRs that were already closed (the ecosystem-
+        # listing wave) fold away; still-open rows stay visible.
+        html = render_html(
+            _bundle(new_prs=[_new(3), _new(4, status="closed")])
+        )
+        assert "<summary>Closed without merge (1)</summary>" in html
+        assert html.index("new 3") < html.index("<details>")
+        assert html.index("new 4") > html.index("<details>")
+
+    def test_new_all_closed_keeps_explicit_open_empty_line(self) -> None:
+        html = render_html(_bundle(new_prs=[_new(4, status="closed")]))
+        assert "No still-open PRs this week." in html
+        assert "<summary>Closed without merge (1)</summary>" in html
 
     def test_active_pr_accepts_inline_commentary(self) -> None:
         # A single-target note on an active PR inlines as a blockquote,
