@@ -9,6 +9,7 @@ silently truncated, and PR + X post fields are HTML-escaped.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 from code.renderers.digest import CrossReference, DigestBundle, render_html
@@ -159,9 +160,9 @@ class TestInformationDesign:
         # Inverted pyramid: the hottest, still-live material reads
         # first; settled material (merged) follows.
         html = render_html(_bundle())
-        active = html.index("<h2>Active discussions")
-        issues = html.index("<h2>Issues")
-        merged = html.index("<h2>Merged PRs")
+        active = html.index('<h2 id="active">Active discussions')
+        issues = html.index('<h2 id="issues">Issues')
+        merged = html.index('<h2 id="merged">Merged PRs')
         assert active < issues < merged
 
     def test_replies_fold_into_per_handle_details(self) -> None:
@@ -201,7 +202,8 @@ class TestGlance:
     def test_glance_sits_between_snapshot_and_picks(self) -> None:
         html = render_html(_bundle())
         assert (
-            html.index("This week at a glance") < html.index("<h2>Picks")
+            html.index("This week at a glance")
+            < html.index('<h2 id="picks">Picks')
         )
 
     def test_actor_table_folds_bots_into_footnote(self) -> None:
@@ -254,3 +256,32 @@ class TestGlance:
             _bundle(x_posts=[_post("1", text="nothing here")], x_keywords=kw)
         )
         assert "X keyword hits: MCP 0" in html
+
+
+class TestPageNavigation:
+    """Week links and the section nav that close the round-trip loop."""
+
+    def test_week_nav_links_to_adjacent_weeks(self) -> None:
+        # The bundle fixture week is 2026-W19.
+        html = render_html(_bundle())
+        assert '<a href="/digest/2026-W18">' in html
+        assert '<a href="/digest/2026-W20">' in html
+
+    def test_section_nav_targets_all_resolve_to_ids(self) -> None:
+        # Every href="#…" in the nav must have a matching id on the
+        # page — the integrity check that keeps the hub honest.
+        html = render_html(_bundle())
+        nav = html[
+            html.index('<nav aria-label="sections">') : html.index("</nav>")
+        ]
+        targets = re.findall(r'href="#([\w-]+)"', nav)
+        ids = set(re.findall(r'id="([\w-]+)"', html))
+        assert len(targets) == 10
+        assert all(target in ids for target in targets)
+
+    def test_malformed_week_renders_without_week_nav(self) -> None:
+        bundle = _bundle()
+        bundle.week = "not-a-week"
+        html = render_html(bundle)
+        assert "not-a-week" in html
+        assert "/digest/not" not in html

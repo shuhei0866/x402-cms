@@ -76,3 +76,16 @@ def week_of(created_at: datetime) -> str:
     """
     iso_year, iso_week, _ = created_at.isocalendar()
     return f"{iso_year:04d}-W{iso_week:02d}"
+
+
+def shift_iso_week(week: str, delta: int) -> str:
+    """Return the ISO week label `delta` weeks away from `week`.
+
+    Pure label arithmetic (via the week's Monday), so year boundaries
+    and 53-week years resolve the way `isocalendar` says they do.
+    Raises `ValueError` for malformed labels, like `parse_iso_week`.
+    """
+    start, _ = parse_iso_week(week)
+    shifted = start + timedelta(weeks=delta)
+    iso_year, iso_week, _ = shifted.isocalendar()
+    return f"{iso_year:04d}-W{iso_week:02d}"
