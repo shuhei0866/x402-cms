@@ -1,0 +1,58 @@
+# Topic categories for the at-a-glance view.
+#
+# The real file `config/topics.yaml` is gitignored — which signals
+# count as which topic is a curation choice, not OSS surface. This
+# `.example.yaml` ships in the repo so a fresh clone renders a
+# working (if coarse) distribution.
+#
+# Matching is mechanical and happens in this order:
+#   1. conventional-commit tokens (type + scope split on `/`) against
+#      `scopes` — the author's own scoping is the strongest signal;
+#   2. whole-title search against `keywords` (word-boundary,
+#      case-insensitive).
+# Category order in this file breaks ties, so the order is itself
+# part of the curation. Unmatched titles land in an explicit
+# `uncategorised` bucket — a thin table shows up as a large bucket,
+# never as a silently wrong distribution.
+
+categories:
+  - key: specs-and-schemes
+    label: specs & schemes
+    scopes: [spec, specs, conformance]
+    keywords: [scheme, conformance, specification]
+
+  - key: sdk-and-chains
+    label: SDK & chains
+    scopes: [python, go, typescript, rust, java, evm, svm, flask, stellar]
+    keywords: [sdk, reference implementation]
+
+  - key: facilitator-and-infra
+    label: facilitator & infra
+    scopes: [facilitators]
+    keywords: [facilitator, e2e, build, ci]
+
+  - key: ecosystem-listings
+    label: ecosystem listings
+    scopes: [ecosystem]
+    keywords: [ecosystem]
+
+  - key: agentic-interop
+    label: agentic interop
+    scopes: [mcp]
+    keywords: [mcp, agentic, agent]
+
+# Keyword buckets for the X-post side of "where the talk is".
+# A post may hit several buckets; zero-hit buckets stay visible so
+# "we looked and found nothing" reads differently from "not tracked".
+x_keywords:
+  - key: agentic-payments
+    label: agentic payments
+    patterns: [agentic, ap2, acp, a2a]
+
+  - key: settlement
+    label: settlement
+    patterns: [settlement, settle]
+
+  - key: stablecoins
+    label: stablecoins
+    patterns: [stablecoin, usdc]

@@ -19,6 +19,7 @@ from code.renderers.digest.readers import (
     read_week,
     read_x_posts_for_week,
 )
+from code.renderers.digest.topics import TopicRule, XKeywordRule
 from code.schemas.commentary import Commentary
 from code.schemas.issue import IssueRecord
 from code.schemas.pr import MergedPR, PRRecord
@@ -119,6 +120,8 @@ class DigestBundle:
     active_prs: list[PRRecord] = field(default_factory=list)
     new_prs: list[PRRecord] = field(default_factory=list)
     issues: list[IssueRecord] = field(default_factory=list)
+    topic_rules: list[TopicRule] = field(default_factory=list)
+    x_keywords: list[XKeywordRule] = field(default_factory=list)
 
 
 def load_digest_bundle(
@@ -128,6 +131,8 @@ def load_digest_bundle(
     project: str | None = None,
     client: firestore.Client | None = None,
     handle_clusters: dict[str, str] | None = None,
+    topic_rules: list[TopicRule] | None = None,
+    x_keywords: list[XKeywordRule] | None = None,
 ) -> DigestBundle:
     """Read all three source collections for `week` and assemble a bundle.
 
@@ -155,4 +160,6 @@ def load_digest_bundle(
         active_prs=active_prs,
         new_prs=new_prs,
         issues=issues,
+        topic_rules=topic_rules or [],
+        x_keywords=x_keywords or [],
     )

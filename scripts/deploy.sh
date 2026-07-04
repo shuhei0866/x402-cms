@@ -28,6 +28,8 @@ SERVICE="x402-cms"
 SA_EMAIL="x402-cms-runner@${PROJECT}.iam.gserviceaccount.com"
 HANDLES_SECRET="x402-cms-tracked-handles"
 HANDLES_PATH="/secrets/tracked_handles.yaml"
+TOPICS_SECRET="x402-cms-topics"
+TOPICS_PATH="/secrets/topics.yaml"
 
 if [ -z "${EVM_ADDRESS:-}" ]; then
   echo "ERROR: EVM_ADDRESS must be exported before running deploy." >&2
@@ -50,4 +52,4 @@ gcloud run deploy "$SERVICE" \
   --cpu 1 \
   --timeout 60s \
   --set-env-vars "EVM_ADDRESS=${EVM_ADDRESS},FACILITATOR_URL=${FACILITATOR_URL},GOOGLE_CLOUD_PROJECT=${PROJECT}" \
-  --update-secrets "${HANDLES_PATH}=${HANDLES_SECRET}:latest"
+  --update-secrets "${HANDLES_PATH}=${HANDLES_SECRET}:latest,${TOPICS_PATH}=${TOPICS_SECRET}:latest"

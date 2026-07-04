@@ -106,6 +106,17 @@ class TestSectionsRender:
         assert "No newly opened PRs this week." in html
         assert "No active issues this week." in html
 
+    def test_whats_hot_ranks_prs_and_issues_by_comments(self) -> None:
+        # Issue #50 (12 comments) outranks PR #2 (7 comments) in the
+        # glance list — kinds compete in one ranking.
+        html = render_html(
+            _bundle(active_prs=[_active(2)], issues=[_issue(50)])
+        )
+        hot = html[html.index("What's hot") : html.index("Where the talk is")]
+        assert hot.index("#50") < hot.index("#2")
+        assert "12 comments (issue)" in hot
+        assert "7 comments (PR)" in hot
+
     def test_new_closed_rows_fold_into_details(self) -> None:
         # Newly opened PRs that were already closed (the ecosystem-
         # listing wave) fold away; still-open rows stay visible.

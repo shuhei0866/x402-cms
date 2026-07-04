@@ -51,10 +51,16 @@ from code.renderers.digest import (
     render_agent_payload,
     render_html,
 )
+from code.renderers.digest.topics import (
+    TopicRule,
+    XKeywordRule,
+    load_topics_config,
+)
 
 EVM_NETWORK: Network = "eip155:84532"  # Base Sepolia
 DIGEST_ROUTE_PATTERN = "GET /digest/*"
 DEFAULT_HANDLES_CONFIG_PATH = "/secrets/tracked_handles.yaml"
+DEFAULT_TOPICS_CONFIG_PATH = "/secrets/topics.yaml"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -71,6 +77,7 @@ class ServerConfig:
     facilitator_url: str
     gcp_project: str | None
     handles_config_path: str
+    topics_config_path: str
 
 
 def _load_config() -> ServerConfig:
@@ -86,6 +93,9 @@ def _load_config() -> ServerConfig:
         gcp_project=os.getenv("GOOGLE_CLOUD_PROJECT"),
         handles_config_path=os.getenv(
             "HANDLES_CONFIG_PATH", DEFAULT_HANDLES_CONFIG_PATH
+        ),
+        topics_config_path=os.getenv(
+            "TOPICS_CONFIG_PATH", DEFAULT_TOPICS_CONFIG_PATH
         ),
     )
 
@@ -105,6 +115,21 @@ def _load_handle_clusters_safely(path: str) -> dict[str, str]:
         return {}
 
 
+def _load_topics_safely(
+    path: str,
+) -> tuple[list[TopicRule], list[XKeywordRule]]:
+    """Load the curated topic mapping; tolerate a missing file.
+
+    Same degradation contract as the cluster map: without the file
+    the glance block shows "no topics config loaded" instead of a
+    distribution, and startup proceeds.
+    """
+    try:
+        return load_topics_config(path)
+    except FileNotFoundError:
+        return [], []
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -115,10 +140,11 @@ def create_app() -> FastAPI:
     """
     configure_logging()
     config = _load_config()
-    # Cluster map is read once at startup — curation is a deploy-time
-    # input, not a per-request lookup, so a single load is enough and
-    # avoids hitting the mounted file on every digest request.
+    # Curation inputs are read once at startup — they are deploy-time
+    # inputs, not per-request lookups, so a single load is enough and
+    # avoids hitting the mounted files on every digest request.
     handle_clusters = _load_handle_clusters_safely(config.handles_config_path)
+    topic_rules, x_keywords = _load_topics_safely(config.topics_config_path)
 
     facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=config.facilitator_url))
     server = x402ResourceServer(facilitator)
@@ -193,6 +219,8 @@ def create_app() -> FastAPI:
                 repo=DEFAULT_REPO,
                 project=config.gcp_project,
                 handle_clusters=handle_clusters,
+                topic_rules=topic_rules,
+                x_keywords=x_keywords,
             )
             return HTMLResponse(render_html(bundle))
 
@@ -227,6 +255,8 @@ def create_app() -> FastAPI:
                 repo=DEFAULT_REPO,
                 project=config.gcp_project,
                 handle_clusters=handle_clusters,
+                topic_rules=topic_rules,
+                x_keywords=x_keywords,
             )
             return JSONResponse(content=render_agent_payload(bundle))
 
@@ -240,6 +270,8 @@ def create_app() -> FastAPI:
             repo=DEFAULT_REPO,
             project=config.gcp_project,
             handle_clusters=handle_clusters,
+            topic_rules=topic_rules,
+            x_keywords=x_keywords,
         )
         payload = render_agent_payload(bundle)
 

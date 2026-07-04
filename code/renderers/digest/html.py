@@ -1,12 +1,19 @@
 """Human HTML view.
 
-Order: week snapshot line → week preface (prose, only if a week-level
-note exists) → Picks (ranked <ol>) → Active discussions → Issues (both
-most-discussed first) → Merged PRs → Newly opened (still-open rows
-visible, closed rows folded) → X posts → Japan community (top-level
-posts visible, replies folded per handle) → Cross-references → end
-Commentary section (multi-target notes, anchored). Single-target notes
-are inlined as a <blockquote> on their PR / X item.
+Order: week snapshot line → This week at a glance (who moved /
+what's hot / where the talk is — the first-view dashboard) → week
+preface (prose, only if a week-level note exists) → Picks (ranked
+<ol>) → Active discussions → Issues (both most-discussed first) →
+Merged PRs → Newly opened (still-open rows visible, closed rows
+folded) → X posts → Japan community (top-level posts visible, replies
+folded per handle) → Cross-references → end Commentary section
+(multi-target notes, anchored). Single-target notes are inlined as a
+<blockquote> on their PR / X item.
+
+The glance block is pure counting over the same mechanical signals;
+its topic distribution comes from the curated scope/keyword mapping
+in `config/topics.yaml` (see `topics.py`), so which signals count as
+which topic is curation, not renderer judgment.
 
 The ordering and folding rules are all mechanical (reply-or-not,
 open-or-closed, comment counts, recency) — anything that *says* what
@@ -28,6 +35,7 @@ class-free semantic HTML, so this module carries no layout logic.
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from html import escape
 
 import nh3
@@ -40,6 +48,7 @@ from code.renderers.digest.bundle import (
     derive_recommendations,
     posts_in_cluster,
 )
+from code.renderers.digest.topics import classify_title, count_x_keyword_hits
 from code.schemas.commentary import Commentary
 from code.schemas.issue import IssueRecord
 from code.schemas.pr import MergedPR, PRRecord
@@ -212,6 +221,176 @@ def _new_prs_section_body(
     return body
 
 
+def _is_bot(author: str) -> bool:
+    """GitHub's `[bot]` suffix, plus a name heuristic.
+
+    The ecosystem-listing wave rides on accounts that are not
+    registered GitHub Apps (`scotia1973-bot`, `clawdbotworker`), so a
+    plain substring check is deliberate; a false positive only moves
+    a row into the footnote, it drops nothing.
+    """
+    return author.endswith("[bot]") or "bot" in author.lower()
+
+
+def _activity_phrase(counts: Counter[str]) -> str:
+    parts = [
+        f"{counts[k]} {k}" for k in ("merged", "active", "opened") if counts[k]
+    ]
+    if counts["issues"]:
+        n = counts["issues"]
+        parts.append(f"{n} issue" + ("s" if n != 1 else ""))
+    return ", ".join(parts)
+
+
+def _glance_html(bundle: DigestBundle) -> str:
+    """The first-view dashboard: who moved / what's hot / where the talk is.
+
+    Pure counting over signals the page already carries. The actor
+    table folds bots into a footnote; What's hot ranks live threads
+    (active PRs + issues) by comment count; the topic distribution is
+    a lookup into the curated `topics.yaml` mapping with an explicit
+    uncategorised bucket.
+    """
+    per_author: dict[str, Counter[str]] = defaultdict(Counter)
+    for pr in bundle.prs:
+        per_author[pr.author]["merged"] += 1
+    for pr in bundle.active_prs:
+        per_author[pr.author]["active"] += 1
+    for pr in bundle.new_prs:
+        per_author[pr.author]["opened"] += 1
+    for issue in bundle.issues:
+        per_author[issue.author]["issues"] += 1
+
+    humans = [(a, c) for a, c in per_author.items() if not _is_bot(a)]
+    bots = [(a, c) for a, c in per_author.items() if _is_bot(a)]
+    humans.sort(key=lambda kv: sum(kv[1].values()), reverse=True)
+    actor_rows = "\n".join(
+        f"<tr><td>@{escape(a)}</td><td>{escape(_activity_phrase(c))}</td></tr>"
+        for a, c in humans[:8]
+    ) or '<tr><td colspan="2">No GitHub activity this week.</td></tr>'
+    bot_items = sum(sum(c.values()) for _, c in bots)
+    bot_note = (
+        f"<p><small>{len(bots)} bot account(s), {bot_items} item(s), "
+        f"kept out of the table.</small></p>"
+        if bots
+        else ""
+    )
+
+    top_posts, _ = _split_top_level(bundle.x_posts)
+    x_counts = Counter(p.author_handle for p in top_posts)
+    if x_counts:
+        x_movers = " · ".join(
+            f"@{escape(h)} {n}" for h, n in x_counts.most_common(8)
+        )
+        x_movers_html = f"<p>X top-level posts: {x_movers}</p>"
+    else:
+        x_movers_html = "<p>X top-level posts: none this week.</p>"
+
+    hot: list[tuple[int, str]] = []
+    for pr in bundle.active_prs:
+        hot.append(
+            (
+                pr.comments,
+                f'<li><a href="{escape(pr.url)}">#{pr.pr_number}</a> '
+                f"{escape(pr.title)} — {pr.comments} comments (PR)</li>",
+            )
+        )
+    for issue in bundle.issues:
+        hot.append(
+            (
+                issue.comments,
+                f'<li><a href="{escape(issue.url)}">#{issue.issue_number}</a> '
+                f"{escape(issue.title)} — {issue.comments} comments (issue)</li>",
+            )
+        )
+    hot.sort(key=lambda item: item[0], reverse=True)
+    hot_html = (
+        "<ol>\n" + "\n".join(li for _, li in hot[:5]) + "\n</ol>"
+        if hot
+        else "<p>No live discussions this week.</p>"
+    )
+
+    titles = [
+        item.title
+        for item in (
+            *bundle.prs,
+            *bundle.active_prs,
+            *bundle.new_prs,
+            *bundle.issues,
+        )
+    ]
+    if bundle.topic_rules:
+        topic_counts = Counter(
+            classify_title(title, bundle.topic_rules) for title in titles
+        )
+        topic_rows = "\n".join(
+            f"<tr><td>{escape(rule.label)}</td>"
+            f"<td>{topic_counts.get(rule.key, 0)}</td></tr>"
+            for rule in bundle.topic_rules
+        )
+        topic_rows += (
+            f"\n<tr><td>uncategorised</td><td>{topic_counts.get(None, 0)}</td></tr>"
+        )
+        topics_html = (
+            "<table>\n<thead><tr><th>GitHub topic</th><th>items</th></tr>"
+            f"</thead>\n<tbody>\n{topic_rows}\n</tbody>\n</table>"
+        )
+    else:
+        topics_html = (
+            "<p>No topics config loaded — GitHub topic distribution "
+            "unavailable.</p>"
+        )
+
+    cluster_counter: dict[str, Counter[str]] = defaultdict(Counter)
+    for post in bundle.x_posts:
+        cluster = bundle.handle_clusters.get(post.author_handle)
+        if cluster is None:
+            continue
+        kind = "top" if post.in_reply_to_id is None else "reply"
+        cluster_counter[cluster][kind] += 1
+    if cluster_counter:
+        cluster_rows = "\n".join(
+            f"<tr><td>{escape(cluster)}</td><td>{c['top']}</td>"
+            f"<td>{c['reply']}</td></tr>"
+            for cluster, c in sorted(
+                cluster_counter.items(),
+                key=lambda kv: sum(kv[1].values()),
+                reverse=True,
+            )
+        )
+        clusters_html = (
+            "\n<table>\n<thead><tr><th>X cluster</th><th>top-level</th>"
+            f"<th>replies</th></tr></thead>\n<tbody>\n{cluster_rows}\n"
+            "</tbody>\n</table>"
+        )
+    else:
+        clusters_html = ""
+
+    keyword_hits = count_x_keyword_hits(bundle.x_posts, bundle.x_keywords)
+    if keyword_hits:
+        keyword_line = " · ".join(
+            f"{escape(rule.label)} {n}" for rule, n in keyword_hits
+        )
+        keywords_html = f"\n<p>X keyword hits: {keyword_line}</p>"
+    else:
+        keywords_html = ""
+
+    return f"""<h2>This week at a glance</h2>
+<h3>Who moved</h3>
+<table>
+<thead><tr><th>GitHub</th><th>activity</th></tr></thead>
+<tbody>
+{actor_rows}
+</tbody>
+</table>
+{bot_note}
+{x_movers_html}
+<h3>What's hot</h3>
+{hot_html}
+<h3>Where the talk is</h3>
+{topics_html}{clusters_html}{keywords_html}"""
+
+
 def render_html(bundle: DigestBundle) -> str:
     """Render the human-facing HTML view for a digest week."""
     single_idx = _single_target_index(bundle.commentaries)
@@ -262,6 +441,7 @@ def render_html(bundle: DigestBundle) -> str:
         f"{len(bundle.issues)} issues · "
         f"{len(top_posts)} X posts + {len(reply_posts)} replies"
     )
+    glance = _glance_html(bundle)
 
     cross_items = "\n".join(
         _html_cross_item(cr) for cr in bundle.cross_references
@@ -294,6 +474,7 @@ def render_html(bundle: DigestBundle) -> str:
 <main>
 <h1>{escape(bundle.repo)} — digest {escape(bundle.week)}</h1>
 <p>{snapshot}</p>
+{glance}
 {preface}
 <h2>Picks ({len(picks)})</h2>
 {picks_html}
