@@ -60,7 +60,9 @@ from code.renderers.digest.topics import (
 EVM_NETWORK: Network = "eip155:84532"  # Base Sepolia
 DIGEST_ROUTE_PATTERN = "GET /digest/*"
 DEFAULT_HANDLES_CONFIG_PATH = "/secrets/tracked_handles.yaml"
-DEFAULT_TOPICS_CONFIG_PATH = "/secrets/topics.yaml"
+# Cloud Run mounts each secret as its own directory volume, so a
+# second secret cannot share /secrets with the handles file.
+DEFAULT_TOPICS_CONFIG_PATH = "/topics/topics.yaml"
 STATIC_DIR = Path(__file__).parent / "static"
 
 
