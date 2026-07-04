@@ -1,34 +1,39 @@
 #!/usr/bin/env bash
-# One-time setup for runtime secrets consumed by Cloud Run Jobs.
+# One-time setup for runtime secrets consumed by Cloud Run.
 #
-# Provisions two secrets:
+# Provisions three secrets:
 #   - `x402-cms-x-bearer`         X API bearer token (read as env var).
 #   - `x402-cms-tracked-handles`  Private curated handle list (mounted
 #                                 as a file so the indexer reads it the
 #                                 same way it reads the local one).
+#   - `x402-cms-topics`           Private topic mapping for the glance
+#                                 view (mounted as a file the Service
+#                                 reads at startup).
 #
-# Neither value enters `--set-env-vars` (which is visible in Cloud
-# Audit Logs / Cloud Build logs); both land in Secret Manager and are
-# attached to the job via `--update-secrets`.
+# No value enters `--set-env-vars` (which is visible in Cloud Audit
+# Logs / Cloud Build logs); all land in Secret Manager and are
+# attached via `--update-secrets`.
 #
 # The script is idempotent: re-running adds a new version to an
-# existing secret rather than failing. The handles secret is skipped
-# (with a warning) if the local file does not exist yet — a fresh
-# clone with only the OSS example template can still set up the
-# bearer secret.
+# existing secret rather than failing. A curated-file secret is
+# skipped (with a warning) if the local file does not exist yet — a
+# fresh clone with only the OSS example templates can still set up
+# the bearer secret.
 #
 # Prereqs:
 #   - gcloud auth login + project set to my-utilities-490202
 #   - Secret Manager API enabled
 #   - .env contains a non-empty X_BEARER_TOKEN line
-#   - (optional) `config/tracked_handles.yaml` exists for the
-#     curated production handle list
+#   - (optional) `config/tracked_handles.yaml` / `config/topics.yaml`
+#     exist for the curated production inputs
 set -euo pipefail
 
 PROJECT="${GOOGLE_CLOUD_PROJECT:-my-utilities-490202}"
 BEARER_SECRET="x402-cms-x-bearer"
 HANDLES_SECRET="x402-cms-tracked-handles"
 HANDLES_FILE="config/tracked_handles.yaml"
+TOPICS_SECRET="x402-cms-topics"
+TOPICS_FILE="config/topics.yaml"
 RUNNER_SA_EMAIL="x402-cms-runner@${PROJECT}.iam.gserviceaccount.com"
 
 cd "$(dirname "$0")/.."
@@ -68,32 +73,39 @@ gcloud secrets add-iam-policy-binding "$BEARER_SECRET" \
 
 echo "Secret accessor role granted to: $RUNNER_SA_EMAIL ($BEARER_SECRET)"
 
-# --- curated handle list ---------------------------------------------
+# --- curated files (handles, topics) ----------------------------------
 
-if [ ! -f "$HANDLES_FILE" ]; then
-  echo "WARN: $HANDLES_FILE not found — skipping $HANDLES_SECRET." >&2
-  echo "      The Cloud Run Job will fall back to whatever path its" >&2
-  echo "      --handles-config points at (the OSS example, by default)." >&2
-  exit 0
-fi
+upsert_file_secret() {
+  local secret="$1" file="$2"
 
-if gcloud secrets describe "$HANDLES_SECRET" --project "$PROJECT" >/dev/null 2>&1; then
-  gcloud secrets versions add "$HANDLES_SECRET" \
-    --data-file="$HANDLES_FILE" \
-    --project "$PROJECT" >/dev/null
-  echo "New version added to existing secret: $HANDLES_SECRET"
-else
-  gcloud secrets create "$HANDLES_SECRET" \
-    --data-file="$HANDLES_FILE" \
-    --replication-policy=automatic \
-    --project "$PROJECT" >/dev/null
-  echo "Secret created: $HANDLES_SECRET"
-fi
+  if [ ! -f "$file" ]; then
+    echo "WARN: $file not found — skipping $secret." >&2
+    echo "      The runtime falls back to its degraded default" >&2
+    echo "      (example config / empty mapping)." >&2
+    return 0
+  fi
 
-gcloud secrets add-iam-policy-binding "$HANDLES_SECRET" \
-  --project "$PROJECT" \
-  --member "serviceAccount:${RUNNER_SA_EMAIL}" \
-  --role "roles/secretmanager.secretAccessor" \
-  >/dev/null
+  if gcloud secrets describe "$secret" --project "$PROJECT" >/dev/null 2>&1; then
+    gcloud secrets versions add "$secret" \
+      --data-file="$file" \
+      --project "$PROJECT" >/dev/null
+    echo "New version added to existing secret: $secret"
+  else
+    gcloud secrets create "$secret" \
+      --data-file="$file" \
+      --replication-policy=automatic \
+      --project "$PROJECT" >/dev/null
+    echo "Secret created: $secret"
+  fi
 
-echo "Secret accessor role granted to: $RUNNER_SA_EMAIL ($HANDLES_SECRET)"
+  gcloud secrets add-iam-policy-binding "$secret" \
+    --project "$PROJECT" \
+    --member "serviceAccount:${RUNNER_SA_EMAIL}" \
+    --role "roles/secretmanager.secretAccessor" \
+    >/dev/null
+
+  echo "Secret accessor role granted to: $RUNNER_SA_EMAIL ($secret)"
+}
+
+upsert_file_secret "$HANDLES_SECRET" "$HANDLES_FILE"
+upsert_file_secret "$TOPICS_SECRET" "$TOPICS_FILE"

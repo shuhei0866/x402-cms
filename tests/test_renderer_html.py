@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from code.renderers.digest import CrossReference, DigestBundle, render_html
+from code.renderers.digest.topics import TopicRule, XKeywordRule
 from code.schemas.pr import MergedPR
 from code.schemas.x_post import XPost
 
@@ -59,6 +60,8 @@ def _bundle(
     prs: list[MergedPR] | None = None,
     x_posts: list[XPost] | None = None,
     cross_references: list[CrossReference] | None = None,
+    topic_rules: list[TopicRule] | None = None,
+    x_keywords: list[XKeywordRule] | None = None,
 ) -> DigestBundle:
     return DigestBundle(
         week="2026-W19",
@@ -66,6 +69,8 @@ def _bundle(
         prs=prs or [],
         x_posts=x_posts or [],
         cross_references=cross_references or [],
+        topic_rules=topic_rules or [],
+        x_keywords=x_keywords or [],
     )
 
 
@@ -188,3 +193,64 @@ class TestInformationDesign:
         html = render_html(_bundle(x_posts=[_post("2", reply_to="1")]))
         assert "No top-level posts this week." in html
         assert "Replies from @DukeOphir (1)" in html
+
+
+class TestGlance:
+    """The first-view dashboard: who moved / what's hot / where the talk is."""
+
+    def test_glance_sits_between_snapshot_and_picks(self) -> None:
+        html = render_html(_bundle())
+        assert (
+            html.index("This week at a glance") < html.index("<h2>Picks")
+        )
+
+    def test_actor_table_folds_bots_into_footnote(self) -> None:
+        prs = [
+            _pr(1, author="phdargen"),
+            _pr(2, author="mintlify[bot]"),
+            _pr(3, author="scotia1973-bot"),
+        ]
+        html = render_html(_bundle(prs=prs))
+        assert "<td>@phdargen</td><td>1 merged</td>" in html
+        assert "<td>@mintlify[bot]</td>" not in html
+        assert "<td>@scotia1973-bot</td>" not in html
+        assert "2 bot account(s), 2 item(s)" in html
+
+    def test_x_movers_count_top_level_posts_only(self) -> None:
+        posts = [
+            _post("1", handle="alice"),
+            _post("2", handle="alice", reply_to="1"),
+        ]
+        html = render_html(_bundle(x_posts=posts))
+        assert "X top-level posts: @alice 1" in html
+
+    def test_topic_distribution_shows_zero_and_uncategorised(self) -> None:
+        rules = [
+            TopicRule(
+                key="specs",
+                label="specs & schemes",
+                scopes=("spec",),
+                keywords=(),
+            ),
+            TopicRule(key="mcp", label="MCP", scopes=("mcp",), keywords=()),
+        ]
+        prs = [
+            _pr(1, title="spec(xrpl): add scheme"),
+            _pr(2, title="mystery work"),
+        ]
+        html = render_html(_bundle(prs=prs, topic_rules=rules))
+        assert "<td>specs &amp; schemes</td><td>1</td>" in html
+        # A tracked topic with no items this week stays visible at 0.
+        assert "<td>MCP</td><td>0</td>" in html
+        assert "<td>uncategorised</td><td>1</td>" in html
+
+    def test_no_topic_rules_shows_explicit_unavailable_line(self) -> None:
+        html = render_html(_bundle(prs=[_pr(1)]))
+        assert "No topics config loaded" in html
+
+    def test_x_keyword_line_includes_zero_buckets(self) -> None:
+        kw = [XKeywordRule(key="mcp", label="MCP", patterns=("mcp",))]
+        html = render_html(
+            _bundle(x_posts=[_post("1", text="nothing here")], x_keywords=kw)
+        )
+        assert "X keyword hits: MCP 0" in html
