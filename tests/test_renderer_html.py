@@ -110,3 +110,19 @@ class TestRenderHtml:
         html = render_html(_bundle(x_posts=[post]))
         assert "<script>" not in html
         assert "&lt;script&gt;" in html
+
+    def test_head_links_vendored_stylesheet_and_viewport(self) -> None:
+        # The human view is styled by the vendored classless Pico
+        # stylesheet; the markup itself stays class-free.
+        html = render_html(_bundle())
+        assert (
+            '<link rel="stylesheet" href="/static/pico.classless.min.css">'
+            in html
+        )
+        assert '<meta name="viewport"' in html
+
+    def test_body_content_is_wrapped_in_main(self) -> None:
+        # Pico's classless layout keys its container on `body > main`.
+        html = render_html(_bundle())
+        assert "<main>" in html
+        assert "</main>" in html

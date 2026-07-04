@@ -27,10 +27,12 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
 from x402.http.middleware.fastapi import FastAPIAdapter
@@ -53,6 +55,7 @@ from code.renderers.digest import (
 EVM_NETWORK: Network = "eip155:84532"  # Base Sepolia
 DIGEST_ROUTE_PATTERN = "GET /digest/*"
 DEFAULT_HANDLES_CONFIG_PATH = "/secrets/tracked_handles.yaml"
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,9 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="x402-cms", version="0.1.0", lifespan=lifespan)
     app.middleware("http")(access_log_middleware)
+    # The stylesheet is vendored so the human view has no external
+    # dependency (no CDN fetch, works under a strict CSP).
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/")
     async def root() -> dict:
