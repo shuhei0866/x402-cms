@@ -12,6 +12,10 @@ on the body conversion — the structural scaffold (section /
 blockquote / ol / anchors) is our own trusted HTML, which is why
 the anchor ids survive. PR / X user text keeps the Phase-2
 escaping.
+
+Styling comes from the vendored classless Pico stylesheet linked in
+the head (served at /static by the server). The markup itself stays
+class-free semantic HTML, so this module carries no layout logic.
 """
 
 from __future__ import annotations
@@ -190,9 +194,12 @@ def render_html(bundle: DigestBundle) -> str:
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>x402-cms — {escape(bundle.repo)} digest {escape(bundle.week)}</title>
+<link rel="stylesheet" href="/static/pico.classless.min.css">
 </head>
 <body>
+<main>
 <h1>{escape(bundle.repo)} — digest {escape(bundle.week)}</h1>
 {preface}
 <h2>Picks ({len(picks)})</h2>
@@ -235,6 +242,7 @@ def render_html(bundle: DigestBundle) -> str:
 
 <h2>Commentary ({len(multi)})</h2>
 {multi_html}
+</main>
 </body>
 </html>
 """
