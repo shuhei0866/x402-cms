@@ -29,7 +29,9 @@ SA_EMAIL="x402-cms-runner@${PROJECT}.iam.gserviceaccount.com"
 HANDLES_SECRET="x402-cms-tracked-handles"
 HANDLES_PATH="/secrets/tracked_handles.yaml"
 TOPICS_SECRET="x402-cms-topics"
-TOPICS_PATH="/secrets/topics.yaml"
+# One secret per mount directory (Cloud Run constraint) — topics
+# cannot share /secrets with the handles mount.
+TOPICS_PATH="/topics/topics.yaml"
 
 if [ -z "${EVM_ADDRESS:-}" ]; then
   echo "ERROR: EVM_ADDRESS must be exported before running deploy." >&2
