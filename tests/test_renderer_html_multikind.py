@@ -82,9 +82,9 @@ class TestSectionsRender:
         html = render_html(
             _bundle(active_prs=[_active(2)], new_prs=[_new(3)], issues=[_issue(50)])
         )
-        assert "<h2>Active discussions (1)</h2>" in html
-        assert "<h2>Newly opened (1)</h2>" in html
-        assert "<h2>Issues (1)</h2>" in html
+        assert '<h2 id="active">Active discussions (1)</h2>' in html
+        assert '<h2 id="new">Newly opened (1)</h2>' in html
+        assert '<h2 id="issues">Issues (1)</h2>' in html
 
     def test_active_row_shows_status_and_comments(self) -> None:
         html = render_html(_bundle(active_prs=[_active(2)]))

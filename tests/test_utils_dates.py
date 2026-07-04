@@ -18,6 +18,7 @@ from code.utils.dates import (
     parse_iso_week,
     previous_iso_week,
     resolve_target_week,
+    shift_iso_week,
     week_of,
 )
 
@@ -135,3 +136,22 @@ class TestResolveTargetWeek:
         assert resolve_target_week(
             None, current=False, today=date(2026, 5, 28)
         ) == previous_iso_week(today=date(2026, 5, 28))
+
+
+class TestShiftIsoWeek:
+    def test_shifts_forward_and_back_within_a_year(self) -> None:
+        assert shift_iso_week("2026-W27", 1) == "2026-W28"
+        assert shift_iso_week("2026-W27", -1) == "2026-W26"
+
+    def test_shifts_across_the_year_boundary(self) -> None:
+        # 2026-W01 starts Mon 2025-12-29; one week back is 2025-W52,
+        # the last ISO week of a 52-week year.
+        assert shift_iso_week("2026-W01", -1) == "2025-W52"
+
+    def test_shifts_out_of_a_53_week_year(self) -> None:
+        # 2026 has 53 ISO weeks, so W53 + 1 lands on 2027-W01.
+        assert shift_iso_week("2026-W53", 1) == "2027-W01"
+
+    def test_malformed_label_raises_value_error(self) -> None:
+        with pytest.raises(ValueError):
+            shift_iso_week("not-a-week", 1)

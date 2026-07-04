@@ -1,8 +1,10 @@
 """Human HTML view.
 
-Order: week snapshot line → This week at a glance (who moved /
-what's hot / where the talk is — the first-view dashboard) → week
-preface (prose, only if a week-level note exists) → Picks (ranked
+Order: adjacent-week links → week snapshot line → section nav (every
+h2 carries a stable id, so the nav is the round-trip hub) → This week
+at a glance (who moved / what's hot / where the talk is — the
+first-view dashboard) → week preface (prose, only if a week-level
+note exists) → Picks (ranked
 <ol>) → Active discussions → Issues (both most-discussed first) →
 Merged PRs → Newly opened (still-open rows visible, closed rows
 folded) → X posts → Japan community (top-level posts visible, replies
@@ -49,6 +51,7 @@ from code.renderers.digest.bundle import (
     posts_in_cluster,
 )
 from code.renderers.digest.topics import classify_title, count_x_keyword_hits
+from code.utils.dates import shift_iso_week
 from code.schemas.commentary import Commentary
 from code.schemas.issue import IssueRecord
 from code.schemas.pr import MergedPR, PRRecord
@@ -375,7 +378,7 @@ def _glance_html(bundle: DigestBundle) -> str:
     else:
         keywords_html = ""
 
-    return f"""<h2>This week at a glance</h2>
+    return f"""<h2 id="glance">This week at a glance</h2>
 <h3>Who moved</h3>
 <table>
 <thead><tr><th>GitHub</th><th>activity</th></tr></thead>
@@ -443,6 +446,18 @@ def render_html(bundle: DigestBundle) -> str:
     )
     glance = _glance_html(bundle)
 
+    # Adjacent-week links; a malformed week label (the route accepts
+    # any string) renders the page without them instead of failing.
+    try:
+        prev_week = shift_iso_week(bundle.week, -1)
+        next_week = shift_iso_week(bundle.week, 1)
+        week_nav = (
+            f'<p><a href="/digest/{escape(prev_week)}">← {escape(prev_week)}</a>'
+            f' · <a href="/digest/{escape(next_week)}">{escape(next_week)} →</a></p>'
+        )
+    except ValueError:
+        week_nav = ""
+
     cross_items = "\n".join(
         _html_cross_item(cr) for cr in bundle.cross_references
     ) or "<li>No cross-references this week.</li>"
@@ -473,42 +488,57 @@ def render_html(bundle: DigestBundle) -> str:
 <body>
 <main>
 <h1>{escape(bundle.repo)} — digest {escape(bundle.week)}</h1>
+{week_nav}
 <p>{snapshot}</p>
+<nav aria-label="sections">
+<ul>
+<li><a href="#glance">Glance</a></li>
+<li><a href="#picks">Picks</a></li>
+<li><a href="#active">Active</a></li>
+<li><a href="#issues">Issues</a></li>
+<li><a href="#merged">Merged</a></li>
+<li><a href="#new">New</a></li>
+<li><a href="#x-posts">X posts</a></li>
+<li><a href="#japan">Japan</a></li>
+<li><a href="#cross-references">Cross-refs</a></li>
+<li><a href="#commentary">Commentary</a></li>
+</ul>
+</nav>
 {glance}
 {preface}
-<h2>Picks ({len(picks)})</h2>
+<h2 id="picks">Picks ({len(picks)})</h2>
 {picks_html}
 
-<h2>Active discussions ({len(bundle.active_prs)})</h2>
+<h2 id="active">Active discussions ({len(bundle.active_prs)})</h2>
 <ul>
 {active_items}
 </ul>
 
-<h2>Issues ({len(bundle.issues)})</h2>
+<h2 id="issues">Issues ({len(bundle.issues)})</h2>
 <ul>
 {issue_items}
 </ul>
 
-<h2>Merged PRs ({len(bundle.prs)})</h2>
+<h2 id="merged">Merged PRs ({len(bundle.prs)})</h2>
 <ul>
 {pr_items}
 </ul>
 
-<h2>Newly opened ({len(bundle.new_prs)})</h2>
+<h2 id="new">Newly opened ({len(bundle.new_prs)})</h2>
 {new_body}
 
-<h2>X posts ({len(bundle.x_posts)})</h2>
+<h2 id="x-posts">X posts ({len(bundle.x_posts)})</h2>
 {x_body}
 
-<h2>Japan community ({len(jp_posts)})</h2>
+<h2 id="japan">Japan community ({len(jp_posts)})</h2>
 {jp_body}
 
-<h2>Cross-references ({len(bundle.cross_references)})</h2>
+<h2 id="cross-references">Cross-references ({len(bundle.cross_references)})</h2>
 <ul>
 {cross_items}
 </ul>
 
-<h2>Commentary ({len(multi)})</h2>
+<h2 id="commentary">Commentary ({len(multi)})</h2>
 {multi_html}
 </main>
 </body>
