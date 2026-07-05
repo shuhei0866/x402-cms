@@ -121,7 +121,9 @@ class TestRenderHtml:
         # a tweet body cannot inject markup into the digest page.
         post = _post("100", text="<script>alert('xss')</script>")
         html = render_html(_bundle(x_posts=[post]))
-        assert "<script>" not in html
+        # The tweet's own script is escaped to an inert entity; the
+        # page's trusted hash-open script is the only real <script>.
+        assert "<script>alert" not in html
         assert "&lt;script&gt;" in html
 
     def test_head_links_vendored_stylesheet_and_viewport(self) -> None:
@@ -140,6 +142,42 @@ class TestRenderHtml:
         assert "<main>" in html
         assert "</main>" in html
 
+    def test_head_links_digest_design_stylesheet(self) -> None:
+        # The design layer rides on top of classless Pico via a second
+        # vendored stylesheet.
+        html = render_html(_bundle())
+        assert '<link rel="stylesheet" href="/static/digest.css">' in html
+
+    def test_snapshot_is_a_marker_free_strip(self) -> None:
+        # The snapshot is a div/span strip, not a <ul>, so Pico's list
+        # bullets never leak into it.
+        html = render_html(_bundle())
+        assert '<div class="snapshot">' in html
+
+    def test_body_sections_are_collapsed_by_default(self) -> None:
+        # The page is glance-first: every body section folds into a
+        # <details> that starts closed, so the reader lands on one
+        # focused screen instead of a long uniform scroll.
+        html = render_html(_bundle())
+        assert '<details class="section" id="active">' in html
+        assert '<details class="section" id="x-posts">' in html
+        # Closed by default — no `open` attribute on a section.
+        assert '<details class="section" id="active" open>' not in html
+
+    def test_glance_and_picks_stay_open_above_the_fold(self) -> None:
+        # The dashboard and the curated picks are the focus; they are
+        # never collapsed.
+        html = render_html(_bundle())
+        assert '<h2 id="glance">' in html
+        assert '<h2 id="picks">' in html
+        assert '<details class="section" id="glance">' not in html
+
+    def test_hash_open_script_present(self) -> None:
+        # Progressive enhancement so a nav / deep link opens its target
+        # section. The page still works with no JS.
+        html = render_html(_bundle())
+        assert "addEventListener(\"hashchange\", openTarget)" in html
+
 
 class TestInformationDesign:
     """Snapshot line, section order, and the reply / closed folds."""
@@ -151,18 +189,20 @@ class TestInformationDesign:
                 x_posts=[_post("1"), _post("2", reply_to="1")],
             )
         )
-        assert (
-            "1 merged · 0 active discussions · 0 newly opened · "
-            "0 issues · 1 X posts + 1 replies"
-        ) in html
+        assert "<b>1</b> merged" in html
+        assert "<b>0</b> active" in html
+        assert "<b>0</b> newly opened" in html
+        assert "<b>0</b> issues" in html
+        assert "<b>1</b> X posts" in html
+        assert "+ 1 replies" in html
 
     def test_discussion_sections_come_before_merged(self) -> None:
         # Inverted pyramid: the hottest, still-live material reads
         # first; settled material (merged) follows.
         html = render_html(_bundle())
-        active = html.index('<h2 id="active">Active discussions')
-        issues = html.index('<h2 id="issues">Issues')
-        merged = html.index('<h2 id="merged">Merged PRs')
+        active = html.index('id="active"')
+        issues = html.index('id="issues"')
+        merged = html.index('id="merged"')
         assert active < issues < merged
 
     def test_replies_fold_into_per_handle_details(self) -> None:
@@ -213,10 +253,11 @@ class TestGlance:
             _pr(3, author="scotia1973-bot"),
         ]
         html = render_html(_bundle(prs=prs))
-        assert "<td>@phdargen</td><td>1 merged</td>" in html
-        assert "<td>@mintlify[bot]</td>" not in html
-        assert "<td>@scotia1973-bot</td>" not in html
-        assert "2 bot account(s), 2 item(s)" in html
+        assert '<span class="who">@phdargen</span>' in html
+        assert '<span class="what">1 merged</span>' in html
+        assert "@mintlify[bot]</span>" not in html
+        assert "@scotia1973-bot</span>" not in html
+        assert "2 bot account(s) · 2 item(s) · folded" in html
 
     def test_x_movers_count_top_level_posts_only(self) -> None:
         posts = [
@@ -224,7 +265,7 @@ class TestGlance:
             _post("2", handle="alice", reply_to="1"),
         ]
         html = render_html(_bundle(x_posts=posts))
-        assert "X top-level posts: @alice 1" in html
+        assert "X: @alice 1" in html
 
     def test_topic_distribution_shows_zero_and_uncategorised(self) -> None:
         rules = [
@@ -241,10 +282,12 @@ class TestGlance:
             _pr(2, title="mystery work"),
         ]
         html = render_html(_bundle(prs=prs, topic_rules=rules))
-        assert "<td>specs &amp; schemes</td><td>1</td>" in html
+        assert '<span class="dlabel">specs &amp; schemes</span>' in html
+        assert '<span class="dnum">1</span>' in html
         # A tracked topic with no items this week stays visible at 0.
-        assert "<td>MCP</td><td>0</td>" in html
-        assert "<td>uncategorised</td><td>1</td>" in html
+        assert '<span class="dlabel">MCP</span>' in html
+        assert '<span class="dnum">0</span>' in html
+        assert '<span class="dlabel">uncategorised</span>' in html
 
     def test_no_topic_rules_shows_explicit_unavailable_line(self) -> None:
         html = render_html(_bundle(prs=[_pr(1)]))
@@ -255,7 +298,7 @@ class TestGlance:
         html = render_html(
             _bundle(x_posts=[_post("1", text="nothing here")], x_keywords=kw)
         )
-        assert "X keyword hits: MCP 0" in html
+        assert "X keywords: MCP 0" in html
 
 
 class TestPageNavigation:

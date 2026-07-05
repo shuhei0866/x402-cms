@@ -1,43 +1,52 @@
 """Human HTML view.
 
-Order: adjacent-week links → week snapshot line → section nav (every
-h2 carries a stable id, so the nav is the round-trip hub) → This week
+The page is glance-first. Everything above the fold is the focus:
+adjacent-week links → week snapshot strip → section nav → This week
 at a glance (who moved / what's hot / where the talk is — the
 first-view dashboard) → week preface (prose, only if a week-level
-note exists) → Picks (ranked
-<ol>) → Active discussions → Issues (both most-discussed first) →
-Merged PRs → Newly opened (still-open rows visible, closed rows
-folded) → X posts → Japan community (top-level posts visible, replies
-folded per handle) → Cross-references → end Commentary section
-(multi-target notes, anchored). Single-target notes are inlined as a
-<blockquote> on their PR / X item.
+note exists) → Picks (ranked <ol>). Below that, every body section is
+a collapsed <details> the reader opens on demand — Active discussions,
+Issues (both most-discussed first), Merged PRs, Newly opened, X posts,
+Japan community, Cross-references, Commentary. This keeps the reader's
+attention narrowed to one screen instead of a long uniform scroll; the
+glance already surfaces the week's hot threads and movers, so the full
+lists are drill-down, not front matter. A tiny progressive-enhancement
+script opens a section when its anchor is navigated to; with no JS the
+sections simply start closed and open on click. Each id is stable, so
+the nav and deep links still resolve.
 
-The glance block is pure counting over the same mechanical signals;
-its topic distribution comes from the curated scope/keyword mapping
-in `config/topics.yaml` (see `topics.py`), so which signals count as
+Within a section the earlier rules hold: newly-opened shows still-open
+rows with closed ones folded, X posts show top-level with replies
+folded per handle, and single-target notes inline as a <blockquote> on
+their PR / X item.
+
+The presentation is a design layer over classless Pico (see
+`static/digest.css`). One grammar runs through the page: a unit of
+activity is weighted by its heat (comment count), rendered as a
+right-aligned tabular number over a magnitude bar. That weight is the
+same mechanical signal the readers already sort by — the design just
+lets it drive visual weight, not only position. Nothing that *says*
+what matters enters here; that stays in the commentary layer. Merged
+and newly-opened rows carry no comment heat (they are settled / brand
+new), so they show a small state tag instead of a bar. Engagement
+metrics (likes) are deliberately never a weight.
+
+The glance block is pure counting over the same signals; its topic
+distribution comes from the curated scope/keyword mapping in
+`config/topics.yaml` (see `topics.py`), so which signals count as
 which topic is curation, not renderer judgment.
-
-The ordering and folding rules are all mechanical (reply-or-not,
-open-or-closed, comment counts, recency) — anything that *says* what
-matters belongs to the commentary layer, not the renderer. Engagement
-sorting (likes) is deliberately not used: it tracks follower count,
-not signal.
 
 Markdown is converted with markdown-it-py (raw HTML disabled, the
 commonmark default) and then nh3-sanitised. The sanitiser only runs
-on the body conversion — the structural scaffold (section /
-blockquote / ol / anchors) is our own trusted HTML, which is why
-the anchor ids survive. PR / X user text keeps the Phase-2
-escaping.
-
-Styling comes from the vendored classless Pico stylesheet linked in
-the head (served at /static by the server). The markup itself stays
-class-free semantic HTML, so this module carries no layout logic.
+on the body conversion — the structural scaffold is our own trusted
+HTML, which is why the class hooks and anchor ids survive. PR / X user
+text keeps the Phase-2 escaping.
 """
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import datetime
 from html import escape
 
 import nh3
@@ -51,17 +60,27 @@ from code.renderers.digest.bundle import (
     posts_in_cluster,
 )
 from code.renderers.digest.topics import classify_title, count_x_keyword_hits
-from code.utils.dates import shift_iso_week
 from code.schemas.commentary import Commentary
 from code.schemas.issue import IssueRecord
 from code.schemas.pr import MergedPR, PRRecord
 from code.schemas.x_post import XPost
+from code.utils.dates import shift_iso_week
 
 _MD = MarkdownIt()
 
 
 def _md_to_safe_html(body_md: str) -> str:
     return nh3.clean(_MD.render(body_md))
+
+
+def _fmt_date(dt: datetime) -> str:
+    """`Jul 4` — month abbrev + day, avoiding platform `%-d` quirks."""
+    return f"{dt:%b} {dt.day}"
+
+
+def _pct(value: int, ceiling: int) -> int:
+    """Bar width as an integer percent of the section's top value."""
+    return round(value / ceiling * 100) if ceiling > 0 else 0
 
 
 def _single_target_index(
@@ -85,66 +104,98 @@ def _blockquotes_for(
     )
 
 
-def _html_pr_item(pr: MergedPR, single_idx: dict[str, list[Commentary]]) -> str:
-    bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
+# --- shared row grammar --------------------------------------------------
+
+
+def _heat_mark(count: int, ceiling: int) -> str:
+    """A right-aligned tabular count over an amber magnitude bar."""
     return (
-        f'<li><a href="{escape(pr.url)}">#{pr.pr_number}</a> '
-        f'{escape(pr.title)} — <em>@{escape(pr.author)}</em>, '
-        f"merged {pr.merged_at:%Y-%m-%d}{bq}</li>"
+        '<span class="mark">'
+        f'<span class="n">{count}</span>'
+        f'<span class="bar amber"><i style="--w:{_pct(count, ceiling)}%"></i>'
+        "</span></span>"
     )
 
 
-def _html_pr_record_item(
-    pr: PRRecord, single_idx: dict[str, list[Commentary]]
+def _tag_mark(label: str) -> str:
+    """A small state tag for rows that carry no comment heat."""
+    return f'<span class="mark tag"><span class="label">{escape(label)}</span></span>'
+
+
+def _meta(*parts: str) -> str:
+    """Join already-escaped metadata fragments with a middot."""
+    return " · ".join(p for p in parts if p)
+
+
+def _row(mark: str, url: str, id_label: str, title: str, meta: str, bq: str = "",
+         cls: str = "") -> str:
+    """One activity row: mark cell + (id · title · meta) + inline note."""
+    row_cls = f"row {cls}".strip()
+    return (
+        f'<li class="{row_cls}">{mark}'
+        '<span class="row-main">'
+        f'<a class="row-id" href="{escape(url)}">{escape(id_label)}</a>'
+        f'<span class="row-title">{escape(title)}</span>'
+        f'<span class="row-meta">{meta}</span>'
+        f"{bq}</span></li>"
+    )
+
+
+def _merged_row(pr: MergedPR, single_idx: dict[str, list[Commentary]]) -> str:
+    bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
+    meta = _meta(f"@{escape(pr.author)}", f"merged {escape(_fmt_date(pr.merged_at))}")
+    return _row(
+        _tag_mark("merged"), pr.url, f"#{pr.pr_number}", pr.title, meta, bq, "settled"
+    )
+
+
+def _active_row(
+    pr: PRRecord, ceiling: int, single_idx: dict[str, list[Commentary]]
 ) -> str:
-    """An active / new PR row — status-aware, with inline commentary.
-
-    The PR carries no `merged_at` (it is not merged), so the trailing
-    phrase reports the state and the timestamp the kind keys on:
-    `active` rows show the comment count and last-updated date, `new`
-    rows show the opened date. Commentary attaches the same way it does
-    to merged PRs — by the `pr:repo#N` token.
-    """
     bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
-    if pr.kind == "active":
-        when = (
-            f"updated {pr.updated_at:%Y-%m-%d}"
-            if pr.updated_at
-            else "recently active"
-        )
-        tail = f"{pr.status}, {pr.comments} comments, {when}"
-    else:
-        when = f"opened {pr.created_at:%Y-%m-%d}" if pr.created_at else "newly opened"
-        tail = f"{pr.status}, {when}"
-    return (
-        f'<li><a href="{escape(pr.url)}">#{pr.pr_number}</a> '
-        f'{escape(pr.title)} — <em>@{escape(pr.author)}</em>, '
-        f"{tail}{bq}</li>"
+    when = f"updated {escape(_fmt_date(pr.updated_at))}" if pr.updated_at else "active"
+    meta = _meta(f"@{escape(pr.author)}", escape(pr.status), when)
+    return _row(
+        _heat_mark(pr.comments, ceiling), pr.url, f"#{pr.pr_number}", pr.title, meta, bq
     )
 
 
-def _html_issue_item(issue: IssueRecord) -> str:
-    when = (
-        f"updated {issue.updated_at:%Y-%m-%d}" if issue.updated_at else issue.state
-    )
-    return (
-        f'<li><a href="{escape(issue.url)}">#{issue.issue_number}</a> '
-        f'{escape(issue.title)} — <em>@{escape(issue.author)}</em>, '
-        f"{issue.state}, {issue.comments} comments, {when}</li>"
+def _new_row(pr: PRRecord, single_idx: dict[str, list[Commentary]]) -> str:
+    bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
+    when = f"opened {escape(_fmt_date(pr.created_at))}" if pr.created_at else "new"
+    meta = _meta(f"@{escape(pr.author)}", escape(pr.status), when)
+    return _row(
+        _tag_mark("new"), pr.url, f"#{pr.pr_number}", pr.title, meta, bq, "settled"
     )
 
 
-def _html_x_item(post: XPost, single_idx: dict[str, list[Commentary]]) -> str:
+def _issue_row(issue: IssueRecord, ceiling: int) -> str:
+    when = f"updated {escape(_fmt_date(issue.updated_at))}" if issue.updated_at else ""
+    meta = _meta(f"@{escape(issue.author)}", escape(issue.state), when)
+    return _row(
+        _heat_mark(issue.comments, ceiling),
+        issue.url,
+        f"#{issue.issue_number}",
+        issue.title,
+        meta,
+    )
+
+
+def _x_row(post: XPost, single_idx: dict[str, list[Commentary]]) -> str:
     bq = _blockquotes_for(f"x:{post.post_id}", single_idx)
     return (
-        f'<li><a href="{escape(post.url)}">@{escape(post.author_handle)}</a>: '
-        f"{escape(post.text)}{bq}</li>"
+        f'<li class="xrow"><a class="row-id" href="{escape(post.url)}">'
+        f"@{escape(post.author_handle)}</a>"
+        f'<span class="xtext">{escape(post.text)}</span>{bq}</li>'
     )
 
 
 def _html_cross_item(cr: CrossReference) -> str:
     post_ids_html = ", ".join(escape(pid) for pid in cr.x_post_ids)
     return f"<li>{escape(cr.pr_ref)} — mentioned by X post id(s): {post_ids_html}</li>"
+
+
+# --- section bodies ------------------------------------------------------
 
 
 def _split_top_level(posts: list[XPost]) -> tuple[list[XPost], list[XPost]]:
@@ -156,6 +207,33 @@ def _split_top_level(posts: list[XPost]) -> tuple[list[XPost], list[XPost]]:
     top = [p for p in posts if p.in_reply_to_id is None]
     replies = [p for p in posts if p.in_reply_to_id is not None]
     return top, replies
+
+
+def _active_section_body(
+    active_prs: list[PRRecord], single_idx: dict[str, list[Commentary]]
+) -> str:
+    if not active_prs:
+        return '<ul class="rows"><li class="empty">No active discussions this week.</li></ul>'
+    ceiling = max(p.comments for p in active_prs)
+    rows = "\n".join(_active_row(p, ceiling, single_idx) for p in active_prs)
+    return f'<ul class="rows">\n{rows}\n</ul>'
+
+
+def _issues_section_body(issues: list[IssueRecord]) -> str:
+    if not issues:
+        return '<ul class="rows"><li class="empty">No active issues this week.</li></ul>'
+    ceiling = max(i.comments for i in issues)
+    rows = "\n".join(_issue_row(i, ceiling) for i in issues)
+    return f'<ul class="rows">\n{rows}\n</ul>'
+
+
+def _merged_section_body(
+    prs: list[MergedPR], single_idx: dict[str, list[Commentary]]
+) -> str:
+    if not prs:
+        return '<ul class="rows"><li class="empty">No merged PRs this week.</li></ul>'
+    rows = "\n".join(_merged_row(p, single_idx) for p in prs)
+    return f'<ul class="rows">\n{rows}\n</ul>'
 
 
 def _posts_section_body(
@@ -171,12 +249,12 @@ def _posts_section_body(
     """
     top, replies = _split_top_level(posts)
     if top:
-        top_items = "\n".join(_html_x_item(p, single_idx) for p in top)
+        top_items = "\n".join(_x_row(p, single_idx) for p in top)
     elif replies:
-        top_items = "<li>No top-level posts this week.</li>"
+        top_items = '<li class="empty">No top-level posts this week.</li>'
     else:
-        top_items = f"<li>{empty_message}</li>"
-    body = f"<ul>\n{top_items}\n</ul>"
+        top_items = f'<li class="empty">{empty_message}</li>'
+    body = f'<ul class="xposts">\n{top_items}\n</ul>'
 
     by_handle: dict[str, list[XPost]] = {}
     for post in replies:
@@ -184,10 +262,11 @@ def _posts_section_body(
     for handle, handle_posts in sorted(
         by_handle.items(), key=lambda kv: len(kv[1]), reverse=True
     ):
-        items = "\n".join(_html_x_item(p, single_idx) for p in handle_posts)
+        items = "\n".join(_x_row(p, single_idx) for p in handle_posts)
         body += (
             f"\n<details><summary>Replies from @{escape(handle)} "
-            f"({len(handle_posts)})</summary>\n<ul>\n{items}\n</ul>\n</details>"
+            f'({len(handle_posts)})</summary>\n<ul class="xposts">\n{items}\n'
+            "</ul>\n</details>"
         )
     return body
 
@@ -205,23 +284,22 @@ def _new_prs_section_body(
     open_rows = [p for p in new_prs if p.status in ("open", "draft")]
     closed_rows = [p for p in new_prs if p.status not in ("open", "draft")]
     if open_rows:
-        open_items = "\n".join(
-            _html_pr_record_item(p, single_idx) for p in open_rows
-        )
+        open_items = "\n".join(_new_row(p, single_idx) for p in open_rows)
     elif closed_rows:
-        open_items = "<li>No still-open PRs this week.</li>"
+        open_items = '<li class="empty">No still-open PRs this week.</li>'
     else:
-        open_items = "<li>No newly opened PRs this week.</li>"
-    body = f"<ul>\n{open_items}\n</ul>"
+        open_items = '<li class="empty">No newly opened PRs this week.</li>'
+    body = f'<ul class="rows">\n{open_items}\n</ul>'
     if closed_rows:
-        closed_items = "\n".join(
-            _html_pr_record_item(p, single_idx) for p in closed_rows
-        )
+        closed_items = "\n".join(_new_row(p, single_idx) for p in closed_rows)
         body += (
             f"\n<details><summary>Closed without merge ({len(closed_rows)})"
-            f"</summary>\n<ul>\n{closed_items}\n</ul>\n</details>"
+            f'</summary>\n<ul class="rows">\n{closed_items}\n</ul>\n</details>'
         )
     return body
+
+
+# --- glance dashboard ----------------------------------------------------
 
 
 def _is_bot(author: str) -> bool:
@@ -245,15 +323,18 @@ def _activity_phrase(counts: Counter[str]) -> str:
     return ", ".join(parts)
 
 
-def _glance_html(bundle: DigestBundle) -> str:
-    """The first-view dashboard: who moved / what's hot / where the talk is.
+def _dist_rows(pairs: list[tuple[str, int]]) -> str:
+    """Volume bars: label · blue magnitude bar · count, largest-scaled."""
+    ceiling = max((n for _, n in pairs), default=0)
+    return "\n".join(
+        f'<div class="dist"><span class="dlabel">{escape(label)}</span>'
+        f'<span class="bar blue"><i style="--w:{_pct(n, ceiling)}%"></i></span>'
+        f'<span class="dnum">{n}</span></div>'
+        for label, n in pairs
+    )
 
-    Pure counting over signals the page already carries. The actor
-    table folds bots into a footnote; What's hot ranks live threads
-    (active PRs + issues) by comment count; the topic distribution is
-    a lookup into the curated `topics.yaml` mapping with an explicit
-    uncategorised bucket.
-    """
+
+def _glance_movers(bundle: DigestBundle) -> str:
     per_author: dict[str, Counter[str]] = defaultdict(Counter)
     for pr in bundle.prs:
         per_author[pr.author]["merged"] += 1
@@ -267,51 +348,62 @@ def _glance_html(bundle: DigestBundle) -> str:
     humans = [(a, c) for a, c in per_author.items() if not _is_bot(a)]
     bots = [(a, c) for a, c in per_author.items() if _is_bot(a)]
     humans.sort(key=lambda kv: sum(kv[1].values()), reverse=True)
-    actor_rows = "\n".join(
-        f"<tr><td>@{escape(a)}</td><td>{escape(_activity_phrase(c))}</td></tr>"
-        for a, c in humans[:8]
-    ) or '<tr><td colspan="2">No GitHub activity this week.</td></tr>'
-    bot_items = sum(sum(c.values()) for _, c in bots)
-    bot_note = (
-        f"<p><small>{len(bots)} bot account(s), {bot_items} item(s), "
-        f"kept out of the table.</small></p>"
-        if bots
-        else ""
-    )
+
+    if humans:
+        mover_rows = "\n".join(
+            f'<li><span class="who">@{escape(a)}</span>'
+            f'<span class="what">{escape(_activity_phrase(c))}</span></li>'
+            for a, c in humans[:8]
+        )
+    else:
+        mover_rows = '<li class="empty">No GitHub activity this week.</li>'
+    movers = f'<ul class="movers">\n{mover_rows}\n</ul>'
+
+    if bots:
+        bot_items = sum(sum(c.values()) for _, c in bots)
+        movers += (
+            f'<p class="foot">{len(bots)} bot account(s) · '
+            f"{bot_items} item(s) · folded</p>"
+        )
 
     top_posts, _ = _split_top_level(bundle.x_posts)
     x_counts = Counter(p.author_handle for p in top_posts)
     if x_counts:
         x_movers = " · ".join(
-            f"@{escape(h)} {n}" for h, n in x_counts.most_common(8)
+            f"@{escape(h)} {n}" for h, n in x_counts.most_common(6)
         )
-        x_movers_html = f"<p>X top-level posts: {x_movers}</p>"
-    else:
-        x_movers_html = "<p>X top-level posts: none this week.</p>"
+        movers += f'<p class="foot"><span class="mono">X: {x_movers}</span></p>'
+    return f"<div class=\"panel\"><h3>Who moved</h3>\n{movers}</div>"
 
-    hot: list[tuple[int, str]] = []
+
+def _glance_hot(bundle: DigestBundle) -> str:
+    hot: list[tuple[int, str, str, int]] = []  # (comments, url, title, number)
     for pr in bundle.active_prs:
-        hot.append(
-            (
-                pr.comments,
-                f'<li><a href="{escape(pr.url)}">#{pr.pr_number}</a> '
-                f"{escape(pr.title)} — {pr.comments} comments (PR)</li>",
-            )
-        )
+        hot.append((pr.comments, pr.url, pr.title, pr.pr_number))
     for issue in bundle.issues:
-        hot.append(
-            (
-                issue.comments,
-                f'<li><a href="{escape(issue.url)}">#{issue.issue_number}</a> '
-                f"{escape(issue.title)} — {issue.comments} comments (issue)</li>",
+        hot.append((issue.comments, issue.url, issue.title, issue.issue_number))
+    hot.sort(key=lambda t: t[0], reverse=True)
+
+    if not hot:
+        body = '<ul class="rows compact"><li class="empty">No live discussions this week.</li></ul>'
+    else:
+        ceiling = hot[0][0]
+        rows = "\n".join(
+            _row(
+                _heat_mark(comments, ceiling),
+                url,
+                f"#{number}",
+                title,
+                "",
             )
+            for comments, url, title, number in hot[:5]
         )
-    hot.sort(key=lambda item: item[0], reverse=True)
-    hot_html = (
-        "<ol>\n" + "\n".join(li for _, li in hot[:5]) + "\n</ol>"
-        if hot
-        else "<p>No live discussions this week.</p>"
-    )
+        body = f'<ul class="rows compact">\n{rows}\n</ul>'
+    return f'<div class="panel"><h3>What\'s hot</h3>\n{body}</div>'
+
+
+def _glance_talk(bundle: DigestBundle) -> str:
+    groups = ""
 
     titles = [
         item.title
@@ -326,22 +418,17 @@ def _glance_html(bundle: DigestBundle) -> str:
         topic_counts = Counter(
             classify_title(title, bundle.topic_rules) for title in titles
         )
-        topic_rows = "\n".join(
-            f"<tr><td>{escape(rule.label)}</td>"
-            f"<td>{topic_counts.get(rule.key, 0)}</td></tr>"
-            for rule in bundle.topic_rules
-        )
-        topic_rows += (
-            f"\n<tr><td>uncategorised</td><td>{topic_counts.get(None, 0)}</td></tr>"
-        )
-        topics_html = (
-            "<table>\n<thead><tr><th>GitHub topic</th><th>items</th></tr>"
-            f"</thead>\n<tbody>\n{topic_rows}\n</tbody>\n</table>"
+        pairs = [
+            (rule.label, topic_counts.get(rule.key, 0)) for rule in bundle.topic_rules
+        ]
+        pairs.append(("uncategorised", topic_counts.get(None, 0)))
+        groups += (
+            f'<div class="distgroup"><h4>GitHub topics</h4>\n{_dist_rows(pairs)}</div>'
         )
     else:
-        topics_html = (
-            "<p>No topics config loaded — GitHub topic distribution "
-            "unavailable.</p>"
+        groups += (
+            '<div class="distgroup"><p class="foot">No topics config loaded — '
+            "GitHub topic distribution unavailable.</p></div>"
         )
 
     cluster_counter: dict[str, Counter[str]] = defaultdict(Counter)
@@ -352,46 +439,76 @@ def _glance_html(bundle: DigestBundle) -> str:
         kind = "top" if post.in_reply_to_id is None else "reply"
         cluster_counter[cluster][kind] += 1
     if cluster_counter:
-        cluster_rows = "\n".join(
-            f"<tr><td>{escape(cluster)}</td><td>{c['top']}</td>"
-            f"<td>{c['reply']}</td></tr>"
+        pairs = [
+            (f"{cluster} (+{c['reply']})" if c["reply"] else cluster, c["top"])
             for cluster, c in sorted(
                 cluster_counter.items(),
                 key=lambda kv: sum(kv[1].values()),
                 reverse=True,
             )
+        ]
+        groups += (
+            f'<div class="distgroup"><h4>X clusters — top-level (+replies)</h4>\n'
+            f"{_dist_rows(pairs)}</div>"
         )
-        clusters_html = (
-            "\n<table>\n<thead><tr><th>X cluster</th><th>top-level</th>"
-            f"<th>replies</th></tr></thead>\n<tbody>\n{cluster_rows}\n"
-            "</tbody>\n</table>"
-        )
-    else:
-        clusters_html = ""
 
     keyword_hits = count_x_keyword_hits(bundle.x_posts, bundle.x_keywords)
     if keyword_hits:
         keyword_line = " · ".join(
             f"{escape(rule.label)} {n}" for rule, n in keyword_hits
         )
-        keywords_html = f"\n<p>X keyword hits: {keyword_line}</p>"
-    else:
-        keywords_html = ""
+        groups += f'<p class="foot"><span class="mono">X keywords: {keyword_line}</span></p>'
 
-    return f"""<h2 id="glance">This week at a glance</h2>
-<h3>Who moved</h3>
-<table>
-<thead><tr><th>GitHub</th><th>activity</th></tr></thead>
-<tbody>
-{actor_rows}
-</tbody>
-</table>
-{bot_note}
-{x_movers_html}
-<h3>What's hot</h3>
-{hot_html}
-<h3>Where the talk is</h3>
-{topics_html}{clusters_html}{keywords_html}"""
+    return f'<div class="panel"><h3>Where the talk is</h3>\n{groups}</div>'
+
+
+def _glance_html(bundle: DigestBundle) -> str:
+    """The first-view dashboard: who moved / what's hot / where the talk is.
+
+    Pure counting over signals the page already carries, laid out as
+    three panels sharing the page's heat / volume bar grammar.
+    """
+    return (
+        '<h2 id="glance">This week at a glance</h2>\n'
+        '<div class="glance">\n'
+        f"{_glance_movers(bundle)}\n"
+        f"{_glance_hot(bundle)}\n"
+        f"{_glance_talk(bundle)}\n"
+        "</div>"
+    )
+
+
+# --- page ----------------------------------------------------------------
+
+
+def _section(sid: str, name: str, count: int, body: str) -> str:
+    """A body section collapsed by default — the drill-down grammar.
+
+    The summary reads as the old section header (name + muted count);
+    the content is present in the DOM but folded, so the page stays
+    short until the reader opens it. `sid` is the stable anchor the
+    nav and the hash-open script target.
+    """
+    return (
+        f'<details class="section" id="{sid}">'
+        f'<summary><span class="sname">{escape(name)}</span> '
+        f'<span class="count">{count}</span></summary>\n{body}\n</details>'
+    )
+
+
+# Progressive enhancement: open a collapsed section when it is the
+# navigation target (nav click, deep link, hashchange). With no JS the
+# sections still work — they start closed and open on click.
+_HASH_OPEN_JS = """<script>
+(function () {
+  function openTarget() {
+    var el = location.hash && document.getElementById(location.hash.slice(1));
+    if (el && el.tagName === "DETAILS") el.open = true;
+  }
+  addEventListener("hashchange", openTarget);
+  openTarget();
+})();
+</script>"""
 
 
 def render_html(bundle: DigestBundle) -> str:
@@ -415,16 +532,10 @@ def render_html(bundle: DigestBundle) -> str:
     else:
         picks_html = "<p>No picks this week.</p>"
 
-    pr_items = "\n".join(
-        _html_pr_item(pr, single_idx) for pr in bundle.prs
-    ) or "<li>No merged PRs this week.</li>"
-    active_items = "\n".join(
-        _html_pr_record_item(pr, single_idx) for pr in bundle.active_prs
-    ) or "<li>No active discussions this week.</li>"
+    active_body = _active_section_body(bundle.active_prs, single_idx)
+    issues_body = _issues_section_body(bundle.issues)
+    merged_body = _merged_section_body(bundle.prs, single_idx)
     new_body = _new_prs_section_body(bundle.new_prs, single_idx)
-    issue_items = "\n".join(
-        _html_issue_item(i) for i in bundle.issues
-    ) or "<li>No active issues this week.</li>"
     x_body = _posts_section_body(
         bundle.x_posts, single_idx, "No X posts this week."
     )
@@ -438,11 +549,14 @@ def render_html(bundle: DigestBundle) -> str:
 
     top_posts, reply_posts = _split_top_level(bundle.x_posts)
     snapshot = (
-        f"{len(bundle.prs)} merged · "
-        f"{len(bundle.active_prs)} active discussions · "
-        f"{len(bundle.new_prs)} newly opened · "
-        f"{len(bundle.issues)} issues · "
-        f"{len(top_posts)} X posts + {len(reply_posts)} replies"
+        '<div class="snapshot">'
+        f"<span><b>{len(bundle.prs)}</b> merged</span>"
+        f"<span><b>{len(bundle.active_prs)}</b> active</span>"
+        f"<span><b>{len(bundle.new_prs)}</b> newly opened</span>"
+        f"<span><b>{len(bundle.issues)}</b> issues</span>"
+        f"<span><b>{len(top_posts)}</b> X posts "
+        f"<em>+ {len(reply_posts)} replies</em></span>"
+        "</div>"
     )
     glance = _glance_html(bundle)
 
@@ -452,15 +566,17 @@ def render_html(bundle: DigestBundle) -> str:
         prev_week = shift_iso_week(bundle.week, -1)
         next_week = shift_iso_week(bundle.week, 1)
         week_nav = (
-            f'<p><a href="/digest/{escape(prev_week)}">← {escape(prev_week)}</a>'
-            f' · <a href="/digest/{escape(next_week)}">{escape(next_week)} →</a></p>'
+            f'<p class="weeknav"><a href="/digest/{escape(prev_week)}">'
+            f"← {escape(prev_week)}</a> · "
+            f'<a href="/digest/{escape(next_week)}">{escape(next_week)} →</a></p>'
         )
     except ValueError:
         week_nav = ""
 
     cross_items = "\n".join(
         _html_cross_item(cr) for cr in bundle.cross_references
-    ) or "<li>No cross-references this week.</li>"
+    ) or '<li class="empty">No cross-references this week.</li>'
+    cross_body = f'<ul class="rows">\n{cross_items}\n</ul>'
 
     multi = [
         c
@@ -475,7 +591,25 @@ def render_html(bundle: DigestBundle) -> str:
             for c in multi
         )
     else:
-        multi_html = "<p>No additional commentary this week.</p>"
+        multi_html = '<p class="empty">No additional commentary this week.</p>'
+
+    sections = "\n".join(
+        (
+            _section("active", "Active discussions", len(bundle.active_prs), active_body),
+            _section("issues", "Issues", len(bundle.issues), issues_body),
+            _section("merged", "Merged PRs", len(bundle.prs), merged_body),
+            _section("new", "Newly opened", len(bundle.new_prs), new_body),
+            _section("x-posts", "X posts", len(bundle.x_posts), x_body),
+            _section("japan", "Japan community", len(jp_posts), jp_body),
+            _section(
+                "cross-references",
+                "Cross-references",
+                len(bundle.cross_references),
+                cross_body,
+            ),
+            _section("commentary", "Commentary", len(multi), multi_html),
+        )
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -484,12 +618,13 @@ def render_html(bundle: DigestBundle) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>x402-cms — {escape(bundle.repo)} digest {escape(bundle.week)}</title>
 <link rel="stylesheet" href="/static/pico.classless.min.css">
+<link rel="stylesheet" href="/static/digest.css">
 </head>
 <body>
 <main>
 <h1>{escape(bundle.repo)} — digest {escape(bundle.week)}</h1>
 {week_nav}
-<p>{snapshot}</p>
+{snapshot}
 <nav aria-label="sections">
 <ul>
 <li><a href="#glance">Glance</a></li>
@@ -506,41 +641,11 @@ def render_html(bundle: DigestBundle) -> str:
 </nav>
 {glance}
 {preface}
-<h2 id="picks">Picks ({len(picks)})</h2>
+<h2 id="picks">Picks <span class="count">{len(picks)}</span></h2>
 {picks_html}
-
-<h2 id="active">Active discussions ({len(bundle.active_prs)})</h2>
-<ul>
-{active_items}
-</ul>
-
-<h2 id="issues">Issues ({len(bundle.issues)})</h2>
-<ul>
-{issue_items}
-</ul>
-
-<h2 id="merged">Merged PRs ({len(bundle.prs)})</h2>
-<ul>
-{pr_items}
-</ul>
-
-<h2 id="new">Newly opened ({len(bundle.new_prs)})</h2>
-{new_body}
-
-<h2 id="x-posts">X posts ({len(bundle.x_posts)})</h2>
-{x_body}
-
-<h2 id="japan">Japan community ({len(jp_posts)})</h2>
-{jp_body}
-
-<h2 id="cross-references">Cross-references ({len(bundle.cross_references)})</h2>
-<ul>
-{cross_items}
-</ul>
-
-<h2 id="commentary">Commentary ({len(multi)})</h2>
-{multi_html}
+{sections}
 </main>
+{_HASH_OPEN_JS}
 </body>
 </html>
 """

@@ -19,7 +19,7 @@ from code.schemas.pr import PRRecord
 D = datetime(2026, 5, 7, tzinfo=timezone.utc)
 
 
-def _active(number: int) -> PRRecord:
+def _active(number: int, *, comments: int = 7) -> PRRecord:
     return PRRecord(
         repo="x402-foundation/x402",
         pr_number=number,
@@ -30,7 +30,7 @@ def _active(number: int) -> PRRecord:
         status="open",
         kind="active",
         updated_at=D,
-        comments=7,
+        comments=comments,
     )
 
 
@@ -82,23 +82,33 @@ class TestSectionsRender:
         html = render_html(
             _bundle(active_prs=[_active(2)], new_prs=[_new(3)], issues=[_issue(50)])
         )
-        assert '<h2 id="active">Active discussions (1)</h2>' in html
-        assert '<h2 id="new">Newly opened (1)</h2>' in html
-        assert '<h2 id="issues">Issues (1)</h2>' in html
+        assert '<details class="section" id="active">' in html
+        assert (
+            '<span class="sname">Active discussions</span> '
+            '<span class="count">1</span>'
+        ) in html
+        assert (
+            '<span class="sname">Newly opened</span> <span class="count">1</span>'
+        ) in html
+        assert (
+            '<span class="sname">Issues</span> <span class="count">1</span>'
+        ) in html
 
     def test_active_row_shows_status_and_comments(self) -> None:
+        # Comment count is the heat number; status rides the muted meta.
         html = render_html(_bundle(active_prs=[_active(2)]))
         assert "#2" in html
-        assert "open, 7 comments" in html
+        assert '<span class="n">7</span>' in html
+        assert "· open ·" in html
 
     def test_new_row_shows_opened_date(self) -> None:
         html = render_html(_bundle(new_prs=[_new(3)]))
-        assert "opened 2026-05-07" in html
+        assert "opened May 7" in html
 
     def test_issue_row_shows_comments(self) -> None:
         html = render_html(_bundle(issues=[_issue(50)]))
         assert "#50" in html
-        assert "12 comments" in html
+        assert '<span class="n">12</span>' in html
 
     def test_empty_sections_render_explicit_lines(self) -> None:
         html = render_html(_bundle())
@@ -114,8 +124,46 @@ class TestSectionsRender:
         )
         hot = html[html.index("What's hot") : html.index("Where the talk is")]
         assert hot.index("#50") < hot.index("#2")
-        assert "12 comments (issue)" in hot
-        assert "7 comments (PR)" in hot
+        # Heat numbers carry the count; the row is compact (no meta).
+        assert '<span class="n">12</span>' in hot
+        assert '<span class="n">7</span>' in hot
+
+    def test_heat_bar_scales_to_section_max(self) -> None:
+        # The bar width encodes comment count relative to the section's
+        # top row: the busiest thread fills the track, a half-as-busy
+        # one fills half. This is the design layer's one bit of real
+        # logic, so it gets pinned.
+        html = render_html(
+            _bundle(active_prs=[_active(1, comments=10), _active(2, comments=5)])
+        )
+        assert 'style="--w:100%"' in html
+        assert 'style="--w:50%"' in html
+
+    def test_merged_and_new_rows_carry_state_tags_not_heat(self) -> None:
+        # Merged / newly-opened rows carry no comment heat (settled /
+        # brand new), so they show a state tag instead of a bar.
+        from code.schemas.pr import MergedPR
+
+        merged = MergedPR(
+            repo="x402-foundation/x402",
+            pr_number=9,
+            title="ship it",
+            merged_at=D,
+            author="phdargen",
+            labels=[],
+            url="https://github.com/x402-foundation/x402/pull/9",
+            week="2026-W19",
+        )
+        html = render_html(DigestBundle(
+            week="2026-W19",
+            repo="x402-foundation/x402",
+            prs=[merged],
+            x_posts=[],
+            cross_references=[],
+            new_prs=[_new(3)],
+        ))
+        assert '<span class="label">merged</span>' in html
+        assert '<span class="label">new</span>' in html
 
     def test_new_closed_rows_fold_into_details(self) -> None:
         # Newly opened PRs that were already closed (the ecosystem-
