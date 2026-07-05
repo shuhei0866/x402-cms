@@ -305,10 +305,11 @@ class TestPageNavigation:
     """Week links and the section nav that close the round-trip loop."""
 
     def test_week_nav_links_to_adjacent_weeks(self) -> None:
-        # The bundle fixture week is 2026-W19.
+        # The bundle fixture week is 2026-W19. Generated links pin the
+        # locale so the choice survives navigation on any browser.
         html = render_html(_bundle())
-        assert '<a href="/digest/2026-W18">' in html
-        assert '<a href="/digest/2026-W20">' in html
+        assert '<a href="/digest/2026-W18?lang=en">' in html
+        assert '<a href="/digest/2026-W20?lang=en">' in html
 
     def test_section_nav_targets_all_resolve_to_ids(self) -> None:
         # Every href="#…" in the nav must have a matching id on the
@@ -357,19 +358,21 @@ class TestLocalisation:
         assert "feat: TVM scheme" in html
 
     def test_toggle_points_to_the_other_locale(self) -> None:
-        # Fixture week is 2026-W19.
+        # Fixture week is 2026-W19. The toggle pins the *other* locale
+        # explicitly, so it works even on an Accept-Language-selected
+        # page (a bare English link would resolve back to Japanese).
         en = render_html(_bundle())
         assert 'class="langtoggle" href="/digest/2026-W19?lang=ja">日本語' in en
         ja = render_html(_bundle(), lang="ja")
-        assert 'class="langtoggle" href="/digest/2026-W19">English' in ja
+        assert 'class="langtoggle" href="/digest/2026-W19?lang=en">English' in ja
 
-    def test_week_nav_carries_the_locale_in_japanese(self) -> None:
-        # The chosen language persists across week navigation.
+    def test_week_nav_carries_the_locale_in_both_directions(self) -> None:
+        # The chosen language persists across week navigation, English
+        # included — a bare link would fall back to Accept-Language.
         ja = render_html(_bundle(), lang="ja")
         assert '<a href="/digest/2026-W20?lang=ja">' in ja
-        # English (the default) keeps clean, param-free week links.
         en = render_html(_bundle())
-        assert '<a href="/digest/2026-W20">' in en
+        assert '<a href="/digest/2026-W20?lang=en">' in en
 
     def test_unknown_lang_falls_back_to_english(self) -> None:
         html = render_html(_bundle(), lang="fr")

@@ -35,8 +35,10 @@ Chrome is localised through `i18n.messages(lang)` (`?lang=` / the
 Accept-Language header pick the locale). Only the scaffolding is
 translated — section names, glance labels, meta words, dates. The rows
 (PR / issue titles, tweet text, handles) are upstream source data and
-stay in their original language. English is the default and its output
-is byte-identical to the pre-i18n renderer.
+stay in their original language. English is the default; a bare URL
+auto-detects via Accept-Language, while the links the page generates
+(week nav, toggle) pin `?lang=` so the chosen locale sticks on any
+browser.
 
 Markdown is converted with markdown-it-py (raw HTML disabled, the
 commonmark default) and then nh3-sanitised. The sanitiser only runs
@@ -583,8 +585,16 @@ _HASH_OPEN_JS = """<script>
 
 
 def _lang_query(lang: str) -> str:
-    """`?lang=` suffix for links; empty for English (the default)."""
-    return f"?lang={lang}" if lang != "en" else ""
+    """`?lang=` suffix so generated links keep the locale explicit.
+
+    Both locales carry the param. A bare URL consults Accept-Language,
+    so an English link must say `?lang=en` too — otherwise, on a
+    Japanese-preferring browser, the English toggle would resolve
+    straight back to Japanese and an explicit English choice would not
+    survive week navigation. Bare / shared URLs still auto-detect; only
+    the links the page generates are pinned.
+    """
+    return f"?lang={lang}"
 
 
 def render_html(bundle: DigestBundle, lang: str = "en") -> str:
