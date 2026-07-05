@@ -35,12 +35,22 @@ h1 {
 }
 
 .weeknav {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem 1rem;
   font-family: var(--digest-mono);
   font-size: 0.85rem;
   margin: 0 0 1rem;
 }
 .weeknav a {
   text-decoration: none;
+}
+.weeknav .langtoggle {
+  margin-left: auto;
+  color: var(--pico-muted-color);
+}
+.weeknav .langtoggle:hover {
+  color: var(--pico-primary);
 }
 
 .snapshot {

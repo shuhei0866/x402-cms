@@ -31,10 +31,12 @@ and newly-opened rows carry no comment heat (they are settled / brand
 new), so they show a small state tag instead of a bar. Engagement
 metrics (likes) are deliberately never a weight.
 
-The glance block is pure counting over the same signals; its topic
-distribution comes from the curated scope/keyword mapping in
-`config/topics.yaml` (see `topics.py`), so which signals count as
-which topic is curation, not renderer judgment.
+Chrome is localised through `i18n.messages(lang)` (`?lang=` / the
+Accept-Language header pick the locale). Only the scaffolding is
+translated — section names, glance labels, meta words, dates. The rows
+(PR / issue titles, tweet text, handles) are upstream source data and
+stay in their original language. English is the default and its output
+is byte-identical to the pre-i18n renderer.
 
 Markdown is converted with markdown-it-py (raw HTML disabled, the
 commonmark default) and then nh3-sanitised. The sanitiser only runs
@@ -46,7 +48,6 @@ text keeps the Phase-2 escaping.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime
 from html import escape
 
 import nh3
@@ -59,6 +60,12 @@ from code.renderers.digest.bundle import (
     derive_recommendations,
     posts_in_cluster,
 )
+from code.renderers.digest.i18n import (
+    fmt_date,
+    messages,
+    normalize_lang,
+    state_word,
+)
 from code.renderers.digest.topics import classify_title, count_x_keyword_hits
 from code.schemas.commentary import Commentary
 from code.schemas.issue import IssueRecord
@@ -68,14 +75,11 @@ from code.utils.dates import shift_iso_week
 
 _MD = MarkdownIt()
 
+Messages = dict[str, str]
+
 
 def _md_to_safe_html(body_md: str) -> str:
     return nh3.clean(_MD.render(body_md))
-
-
-def _fmt_date(dt: datetime) -> str:
-    """`Jul 4` — month abbrev + day, avoiding platform `%-d` quirks."""
-    return f"{dt:%b} {dt.day}"
 
 
 def _pct(value: int, ceiling: int) -> int:
@@ -141,37 +145,60 @@ def _row(mark: str, url: str, id_label: str, title: str, meta: str, bq: str = ""
     )
 
 
-def _merged_row(pr: MergedPR, single_idx: dict[str, list[Commentary]]) -> str:
+def _merged_row(
+    pr: MergedPR, single_idx: dict[str, list[Commentary]], m: Messages
+) -> str:
     bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
-    meta = _meta(f"@{escape(pr.author)}", f"merged {escape(_fmt_date(pr.merged_at))}")
+    when = m["when_merged"].format(d=escape(fmt_date(pr.merged_at, m)))
+    meta = _meta(f"@{escape(pr.author)}", when)
     return _row(
-        _tag_mark("merged"), pr.url, f"#{pr.pr_number}", pr.title, meta, bq, "settled"
+        _tag_mark(m["tag_merged"]),
+        pr.url,
+        f"#{pr.pr_number}",
+        pr.title,
+        meta,
+        bq,
+        "settled",
     )
 
 
 def _active_row(
-    pr: PRRecord, ceiling: int, single_idx: dict[str, list[Commentary]]
+    pr: PRRecord, ceiling: int, single_idx: dict[str, list[Commentary]], m: Messages
 ) -> str:
     bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
-    when = f"updated {escape(_fmt_date(pr.updated_at))}" if pr.updated_at else "active"
-    meta = _meta(f"@{escape(pr.author)}", escape(pr.status), when)
+    when = (
+        m["when_updated"].format(d=escape(fmt_date(pr.updated_at, m)))
+        if pr.updated_at
+        else m["when_active"]
+    )
+    meta = _meta(f"@{escape(pr.author)}", escape(state_word(pr.status, m)), when)
     return _row(
         _heat_mark(pr.comments, ceiling), pr.url, f"#{pr.pr_number}", pr.title, meta, bq
     )
 
 
-def _new_row(pr: PRRecord, single_idx: dict[str, list[Commentary]]) -> str:
+def _new_row(
+    pr: PRRecord, single_idx: dict[str, list[Commentary]], m: Messages
+) -> str:
     bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
-    when = f"opened {escape(_fmt_date(pr.created_at))}" if pr.created_at else "new"
-    meta = _meta(f"@{escape(pr.author)}", escape(pr.status), when)
+    when = (
+        m["when_opened"].format(d=escape(fmt_date(pr.created_at, m)))
+        if pr.created_at
+        else m["when_new"]
+    )
+    meta = _meta(f"@{escape(pr.author)}", escape(state_word(pr.status, m)), when)
     return _row(
-        _tag_mark("new"), pr.url, f"#{pr.pr_number}", pr.title, meta, bq, "settled"
+        _tag_mark(m["tag_new"]), pr.url, f"#{pr.pr_number}", pr.title, meta, bq, "settled"
     )
 
 
-def _issue_row(issue: IssueRecord, ceiling: int) -> str:
-    when = f"updated {escape(_fmt_date(issue.updated_at))}" if issue.updated_at else ""
-    meta = _meta(f"@{escape(issue.author)}", escape(issue.state), when)
+def _issue_row(issue: IssueRecord, ceiling: int, m: Messages) -> str:
+    when = (
+        m["when_updated"].format(d=escape(fmt_date(issue.updated_at, m)))
+        if issue.updated_at
+        else ""
+    )
+    meta = _meta(f"@{escape(issue.author)}", escape(state_word(issue.state, m)), when)
     return _row(
         _heat_mark(issue.comments, ceiling),
         issue.url,
@@ -190,9 +217,11 @@ def _x_row(post: XPost, single_idx: dict[str, list[Commentary]]) -> str:
     )
 
 
-def _html_cross_item(cr: CrossReference) -> str:
+def _html_cross_item(cr: CrossReference, m: Messages) -> str:
     post_ids_html = ", ".join(escape(pid) for pid in cr.x_post_ids)
-    return f"<li>{escape(cr.pr_ref)} — mentioned by X post id(s): {post_ids_html}</li>"
+    return "<li>{}</li>".format(
+        m["cross_item"].format(ref=escape(cr.pr_ref), ids=post_ids_html)
+    )
 
 
 # --- section bodies ------------------------------------------------------
@@ -209,30 +238,34 @@ def _split_top_level(posts: list[XPost]) -> tuple[list[XPost], list[XPost]]:
     return top, replies
 
 
+def _empty(message: str) -> str:
+    return f'<ul class="rows"><li class="empty">{escape(message)}</li></ul>'
+
+
 def _active_section_body(
-    active_prs: list[PRRecord], single_idx: dict[str, list[Commentary]]
+    active_prs: list[PRRecord], single_idx: dict[str, list[Commentary]], m: Messages
 ) -> str:
     if not active_prs:
-        return '<ul class="rows"><li class="empty">No active discussions this week.</li></ul>'
+        return _empty(m["empty_active"])
     ceiling = max(p.comments for p in active_prs)
-    rows = "\n".join(_active_row(p, ceiling, single_idx) for p in active_prs)
+    rows = "\n".join(_active_row(p, ceiling, single_idx, m) for p in active_prs)
     return f'<ul class="rows">\n{rows}\n</ul>'
 
 
-def _issues_section_body(issues: list[IssueRecord]) -> str:
+def _issues_section_body(issues: list[IssueRecord], m: Messages) -> str:
     if not issues:
-        return '<ul class="rows"><li class="empty">No active issues this week.</li></ul>'
+        return _empty(m["empty_issues"])
     ceiling = max(i.comments for i in issues)
-    rows = "\n".join(_issue_row(i, ceiling) for i in issues)
+    rows = "\n".join(_issue_row(i, ceiling, m) for i in issues)
     return f'<ul class="rows">\n{rows}\n</ul>'
 
 
 def _merged_section_body(
-    prs: list[MergedPR], single_idx: dict[str, list[Commentary]]
+    prs: list[MergedPR], single_idx: dict[str, list[Commentary]], m: Messages
 ) -> str:
     if not prs:
-        return '<ul class="rows"><li class="empty">No merged PRs this week.</li></ul>'
-    rows = "\n".join(_merged_row(p, single_idx) for p in prs)
+        return _empty(m["empty_merged"])
+    rows = "\n".join(_merged_row(p, single_idx, m) for p in prs)
     return f'<ul class="rows">\n{rows}\n</ul>'
 
 
@@ -240,6 +273,7 @@ def _posts_section_body(
     posts: list[XPost],
     single_idx: dict[str, list[Commentary]],
     empty_message: str,
+    m: Messages,
 ) -> str:
     """Top-level posts as a visible list; replies folded per handle.
 
@@ -251,9 +285,9 @@ def _posts_section_body(
     if top:
         top_items = "\n".join(_x_row(p, single_idx) for p in top)
     elif replies:
-        top_items = '<li class="empty">No top-level posts this week.</li>'
+        top_items = f'<li class="empty">{escape(m["empty_toplevel"])}</li>'
     else:
-        top_items = f'<li class="empty">{empty_message}</li>'
+        top_items = f'<li class="empty">{escape(empty_message)}</li>'
     body = f'<ul class="xposts">\n{top_items}\n</ul>'
 
     by_handle: dict[str, list[XPost]] = {}
@@ -263,10 +297,12 @@ def _posts_section_body(
         by_handle.items(), key=lambda kv: len(kv[1]), reverse=True
     ):
         items = "\n".join(_x_row(p, single_idx) for p in handle_posts)
+        summary = m["fold_replies"].format(
+            handle=escape(handle), n=len(handle_posts)
+        )
         body += (
-            f"\n<details><summary>Replies from @{escape(handle)} "
-            f'({len(handle_posts)})</summary>\n<ul class="xposts">\n{items}\n'
-            "</ul>\n</details>"
+            f"\n<details><summary>{summary}</summary>\n"
+            f'<ul class="xposts">\n{items}\n</ul>\n</details>'
         )
     return body
 
@@ -274,6 +310,7 @@ def _posts_section_body(
 def _new_prs_section_body(
     new_prs: list[PRRecord],
     single_idx: dict[str, list[Commentary]],
+    m: Messages,
 ) -> str:
     """Still-open newcomers as a visible list; closed ones folded.
 
@@ -284,17 +321,18 @@ def _new_prs_section_body(
     open_rows = [p for p in new_prs if p.status in ("open", "draft")]
     closed_rows = [p for p in new_prs if p.status not in ("open", "draft")]
     if open_rows:
-        open_items = "\n".join(_new_row(p, single_idx) for p in open_rows)
+        open_items = "\n".join(_new_row(p, single_idx, m) for p in open_rows)
     elif closed_rows:
-        open_items = '<li class="empty">No still-open PRs this week.</li>'
+        open_items = f'<li class="empty">{escape(m["empty_new_open"])}</li>'
     else:
-        open_items = '<li class="empty">No newly opened PRs this week.</li>'
+        open_items = f'<li class="empty">{escape(m["empty_new"])}</li>'
     body = f'<ul class="rows">\n{open_items}\n</ul>'
     if closed_rows:
-        closed_items = "\n".join(_new_row(p, single_idx) for p in closed_rows)
+        closed_items = "\n".join(_new_row(p, single_idx, m) for p in closed_rows)
+        summary = m["fold_closed"].format(n=len(closed_rows))
         body += (
-            f"\n<details><summary>Closed without merge ({len(closed_rows)})"
-            f'</summary>\n<ul class="rows">\n{closed_items}\n</ul>\n</details>'
+            f"\n<details><summary>{summary}</summary>\n"
+            f'<ul class="rows">\n{closed_items}\n</ul>\n</details>'
         )
     return body
 
@@ -313,7 +351,16 @@ def _is_bot(author: str) -> bool:
     return author.endswith("[bot]") or "bot" in author.lower()
 
 
-def _activity_phrase(counts: Counter[str]) -> str:
+def _activity_phrase(counts: Counter[str], m: Messages) -> str:
+    """Per-author roll-up, e.g. `6 merged` / `1 merged, 2 opened`."""
+    if m["lang"] == "ja":
+        labels = (
+            ("merged", "マージ"),
+            ("active", "アクティブ"),
+            ("opened", "作成"),
+            ("issues", "issue"),
+        )
+        return " · ".join(f"{lbl} {counts[k]}" for k, lbl in labels if counts[k])
     parts = [
         f"{counts[k]} {k}" for k in ("merged", "active", "opened") if counts[k]
     ]
@@ -334,7 +381,7 @@ def _dist_rows(pairs: list[tuple[str, int]]) -> str:
     )
 
 
-def _glance_movers(bundle: DigestBundle) -> str:
+def _glance_movers(bundle: DigestBundle, m: Messages) -> str:
     per_author: dict[str, Counter[str]] = defaultdict(Counter)
     for pr in bundle.prs:
         per_author[pr.author]["merged"] += 1
@@ -352,18 +399,19 @@ def _glance_movers(bundle: DigestBundle) -> str:
     if humans:
         mover_rows = "\n".join(
             f'<li><span class="who">@{escape(a)}</span>'
-            f'<span class="what">{escape(_activity_phrase(c))}</span></li>'
+            f'<span class="what">{escape(_activity_phrase(c, m))}</span></li>'
             for a, c in humans[:8]
         )
     else:
-        mover_rows = '<li class="empty">No GitHub activity this week.</li>'
+        mover_rows = f'<li class="empty">{escape(m["empty_gh_activity"])}</li>'
     movers = f'<ul class="movers">\n{mover_rows}\n</ul>'
 
     if bots:
         bot_items = sum(sum(c.values()) for _, c in bots)
         movers += (
-            f'<p class="foot">{len(bots)} bot account(s) · '
-            f"{bot_items} item(s) · folded</p>"
+            '<p class="foot">'
+            + escape(m["bot_foot"].format(n=len(bots), items=bot_items))
+            + "</p>"
         )
 
     top_posts, _ = _split_top_level(bundle.x_posts)
@@ -372,11 +420,14 @@ def _glance_movers(bundle: DigestBundle) -> str:
         x_movers = " · ".join(
             f"@{escape(h)} {n}" for h, n in x_counts.most_common(6)
         )
-        movers += f'<p class="foot"><span class="mono">X: {x_movers}</span></p>'
-    return f"<div class=\"panel\"><h3>Who moved</h3>\n{movers}</div>"
+        movers += (
+            f'<p class="foot"><span class="mono">{escape(m["x_movers_prefix"])} '
+            f"{x_movers}</span></p>"
+        )
+    return f'<div class="panel"><h3>{escape(m["glance_who"])}</h3>\n{movers}</div>'
 
 
-def _glance_hot(bundle: DigestBundle) -> str:
+def _glance_hot(bundle: DigestBundle, m: Messages) -> str:
     hot: list[tuple[int, str, str, int]] = []  # (comments, url, title, number)
     for pr in bundle.active_prs:
         hot.append((pr.comments, pr.url, pr.title, pr.pr_number))
@@ -385,24 +436,21 @@ def _glance_hot(bundle: DigestBundle) -> str:
     hot.sort(key=lambda t: t[0], reverse=True)
 
     if not hot:
-        body = '<ul class="rows compact"><li class="empty">No live discussions this week.</li></ul>'
+        body = (
+            '<ul class="rows compact"><li class="empty">'
+            f'{escape(m["empty_hot"])}</li></ul>'
+        )
     else:
         ceiling = hot[0][0]
         rows = "\n".join(
-            _row(
-                _heat_mark(comments, ceiling),
-                url,
-                f"#{number}",
-                title,
-                "",
-            )
+            _row(_heat_mark(comments, ceiling), url, f"#{number}", title, "")
             for comments, url, title, number in hot[:5]
         )
         body = f'<ul class="rows compact">\n{rows}\n</ul>'
-    return f'<div class="panel"><h3>What\'s hot</h3>\n{body}</div>'
+    return f'<div class="panel"><h3>{escape(m["glance_hot"])}</h3>\n{body}</div>'
 
 
-def _glance_talk(bundle: DigestBundle) -> str:
+def _glance_talk(bundle: DigestBundle, m: Messages) -> str:
     groups = ""
 
     titles = [
@@ -421,14 +469,15 @@ def _glance_talk(bundle: DigestBundle) -> str:
         pairs = [
             (rule.label, topic_counts.get(rule.key, 0)) for rule in bundle.topic_rules
         ]
-        pairs.append(("uncategorised", topic_counts.get(None, 0)))
+        pairs.append((m["topic_uncategorised"], topic_counts.get(None, 0)))
         groups += (
-            f'<div class="distgroup"><h4>GitHub topics</h4>\n{_dist_rows(pairs)}</div>'
+            f'<div class="distgroup"><h4>{escape(m["glance_gh_topics"])}</h4>\n'
+            f"{_dist_rows(pairs)}</div>"
         )
     else:
         groups += (
-            '<div class="distgroup"><p class="foot">No topics config loaded — '
-            "GitHub topic distribution unavailable.</p></div>"
+            '<div class="distgroup"><p class="foot">'
+            f'{escape(m["topics_unavailable"])}</p></div>'
         )
 
     cluster_counter: dict[str, Counter[str]] = defaultdict(Counter)
@@ -448,7 +497,7 @@ def _glance_talk(bundle: DigestBundle) -> str:
             )
         ]
         groups += (
-            f'<div class="distgroup"><h4>X clusters — top-level (+replies)</h4>\n'
+            f'<div class="distgroup"><h4>{escape(m["glance_x_clusters"])}</h4>\n'
             f"{_dist_rows(pairs)}</div>"
         )
 
@@ -457,23 +506,26 @@ def _glance_talk(bundle: DigestBundle) -> str:
         keyword_line = " · ".join(
             f"{escape(rule.label)} {n}" for rule, n in keyword_hits
         )
-        groups += f'<p class="foot"><span class="mono">X keywords: {keyword_line}</span></p>'
+        groups += (
+            f'<p class="foot"><span class="mono">{escape(m["x_keywords_prefix"])} '
+            f"{keyword_line}</span></p>"
+        )
 
-    return f'<div class="panel"><h3>Where the talk is</h3>\n{groups}</div>'
+    return f'<div class="panel"><h3>{escape(m["glance_talk"])}</h3>\n{groups}</div>'
 
 
-def _glance_html(bundle: DigestBundle) -> str:
+def _glance_html(bundle: DigestBundle, m: Messages) -> str:
     """The first-view dashboard: who moved / what's hot / where the talk is.
 
     Pure counting over signals the page already carries, laid out as
     three panels sharing the page's heat / volume bar grammar.
     """
     return (
-        '<h2 id="glance">This week at a glance</h2>\n'
+        f'<h2 id="glance">{escape(m["glance_title"])}</h2>\n'
         '<div class="glance">\n'
-        f"{_glance_movers(bundle)}\n"
-        f"{_glance_hot(bundle)}\n"
-        f"{_glance_talk(bundle)}\n"
+        f"{_glance_movers(bundle, m)}\n"
+        f"{_glance_hot(bundle, m)}\n"
+        f"{_glance_talk(bundle, m)}\n"
         "</div>"
     )
 
@@ -496,6 +548,25 @@ def _section(sid: str, name: str, count: int, body: str) -> str:
     )
 
 
+def _nav(m: Messages) -> str:
+    items = [
+        ("glance", "nav_glance"),
+        ("picks", "nav_picks"),
+        ("active", "nav_active"),
+        ("issues", "nav_issues"),
+        ("merged", "nav_merged"),
+        ("new", "nav_new"),
+        ("x-posts", "nav_xposts"),
+        ("japan", "nav_japan"),
+        ("cross-references", "nav_cross"),
+        ("commentary", "nav_commentary"),
+    ]
+    links = "\n".join(
+        f'<li><a href="#{sid}">{escape(m[key])}</a></li>' for sid, key in items
+    )
+    return f'<nav aria-label="sections">\n<ul>\n{links}\n</ul>\n</nav>'
+
+
 # Progressive enhancement: open a collapsed section when it is the
 # navigation target (nav click, deep link, hashchange). With no JS the
 # sections still work — they start closed and open on click.
@@ -511,8 +582,21 @@ _HASH_OPEN_JS = """<script>
 </script>"""
 
 
-def render_html(bundle: DigestBundle) -> str:
-    """Render the human-facing HTML view for a digest week."""
+def _lang_query(lang: str) -> str:
+    """`?lang=` suffix for links; empty for English (the default)."""
+    return f"?lang={lang}" if lang != "en" else ""
+
+
+def render_html(bundle: DigestBundle, lang: str = "en") -> str:
+    """Render the human-facing HTML view for a digest week.
+
+    `lang` selects the chrome locale (`en` default, `ja` supported);
+    an unknown value falls back to English. Row content is never
+    translated.
+    """
+    lang = normalize_lang(lang)
+    m = messages(lang)
+    q = _lang_query(lang)
     single_idx = _single_target_index(bundle.commentaries)
 
     preface = "".join(
@@ -530,35 +614,32 @@ def render_html(bundle: DigestBundle) -> str:
         )
         picks_html = f"<ol>\n{pick_items}\n</ol>"
     else:
-        picks_html = "<p>No picks this week.</p>"
+        picks_html = f'<p>{escape(m["empty_picks"])}</p>'
 
-    active_body = _active_section_body(bundle.active_prs, single_idx)
-    issues_body = _issues_section_body(bundle.issues)
-    merged_body = _merged_section_body(bundle.prs, single_idx)
-    new_body = _new_prs_section_body(bundle.new_prs, single_idx)
-    x_body = _posts_section_body(
-        bundle.x_posts, single_idx, "No X posts this week."
-    )
+    active_body = _active_section_body(bundle.active_prs, single_idx, m)
+    issues_body = _issues_section_body(bundle.issues, m)
+    merged_body = _merged_section_body(bundle.prs, single_idx, m)
+    new_body = _new_prs_section_body(bundle.new_prs, single_idx, m)
+    x_body = _posts_section_body(bundle.x_posts, single_idx, m["empty_xposts"], m)
 
     jp_posts = posts_in_cluster(
         bundle.x_posts, bundle.handle_clusters, JAPAN_CLUSTER
     )
-    jp_body = _posts_section_body(
-        jp_posts, single_idx, "No Japan community posts this week."
-    )
+    jp_body = _posts_section_body(jp_posts, single_idx, m["empty_japan"], m)
 
     top_posts, reply_posts = _split_top_level(bundle.x_posts)
+    replies = m["snap_replies"].format(n=len(reply_posts))
     snapshot = (
         '<div class="snapshot">'
-        f"<span><b>{len(bundle.prs)}</b> merged</span>"
-        f"<span><b>{len(bundle.active_prs)}</b> active</span>"
-        f"<span><b>{len(bundle.new_prs)}</b> newly opened</span>"
-        f"<span><b>{len(bundle.issues)}</b> issues</span>"
-        f"<span><b>{len(top_posts)}</b> X posts "
-        f"<em>+ {len(reply_posts)} replies</em></span>"
+        f'<span><b>{len(bundle.prs)}</b> {escape(m["snap_merged"])}</span>'
+        f'<span><b>{len(bundle.active_prs)}</b> {escape(m["snap_active"])}</span>'
+        f'<span><b>{len(bundle.new_prs)}</b> {escape(m["snap_new"])}</span>'
+        f'<span><b>{len(bundle.issues)}</b> {escape(m["snap_issues"])}</span>'
+        f'<span><b>{len(top_posts)}</b> {escape(m["snap_xposts"])} '
+        f"<em>{escape(replies)}</em></span>"
         "</div>"
     )
-    glance = _glance_html(bundle)
+    glance = _glance_html(bundle, m)
 
     # Adjacent-week links; a malformed week label (the route accepts
     # any string) renders the page without them instead of failing.
@@ -566,16 +647,21 @@ def render_html(bundle: DigestBundle) -> str:
         prev_week = shift_iso_week(bundle.week, -1)
         next_week = shift_iso_week(bundle.week, 1)
         week_nav = (
-            f'<p class="weeknav"><a href="/digest/{escape(prev_week)}">'
-            f"← {escape(prev_week)}</a> · "
-            f'<a href="/digest/{escape(next_week)}">{escape(next_week)} →</a></p>'
+            f'<a href="/digest/{escape(prev_week)}{q}">← {escape(prev_week)}</a> · '
+            f'<a href="/digest/{escape(next_week)}{q}">{escape(next_week)} →</a>'
         )
     except ValueError:
         week_nav = ""
 
+    toggle = (
+        f'<a class="langtoggle" href="/digest/{escape(bundle.week)}'
+        f'{_lang_query(m["toggle_to"])}">{escape(m["toggle_text"])}</a>'
+    )
+    masthead_nav = f'<p class="weeknav">{week_nav}{toggle}</p>'
+
     cross_items = "\n".join(
-        _html_cross_item(cr) for cr in bundle.cross_references
-    ) or '<li class="empty">No cross-references this week.</li>'
+        _html_cross_item(cr, m) for cr in bundle.cross_references
+    ) or f'<li class="empty">{escape(m["empty_cross"])}</li>'
     cross_body = f'<ul class="rows">\n{cross_items}\n</ul>'
 
     multi = [
@@ -591,57 +677,53 @@ def render_html(bundle: DigestBundle) -> str:
             for c in multi
         )
     else:
-        multi_html = '<p class="empty">No additional commentary this week.</p>'
+        multi_html = f'<p class="empty">{escape(m["empty_commentary"])}</p>'
 
     sections = "\n".join(
         (
-            _section("active", "Active discussions", len(bundle.active_prs), active_body),
-            _section("issues", "Issues", len(bundle.issues), issues_body),
-            _section("merged", "Merged PRs", len(bundle.prs), merged_body),
-            _section("new", "Newly opened", len(bundle.new_prs), new_body),
-            _section("x-posts", "X posts", len(bundle.x_posts), x_body),
-            _section("japan", "Japan community", len(jp_posts), jp_body),
+            _section("active", m["sec_active"], len(bundle.active_prs), active_body),
+            _section("issues", m["sec_issues"], len(bundle.issues), issues_body),
+            _section("merged", m["sec_merged"], len(bundle.prs), merged_body),
+            _section("new", m["sec_new"], len(bundle.new_prs), new_body),
+            _section("x-posts", m["sec_xposts"], len(bundle.x_posts), x_body),
+            _section("japan", m["sec_japan"], len(jp_posts), jp_body),
             _section(
                 "cross-references",
-                "Cross-references",
+                m["sec_cross"],
                 len(bundle.cross_references),
                 cross_body,
             ),
-            _section("commentary", "Commentary", len(multi), multi_html),
+            _section("commentary", m["sec_commentary"], len(multi), multi_html),
         )
     )
 
+    title = (
+        f'x402-cms — {escape(bundle.repo)} {escape(m["digest_word"])} '
+        f"{escape(bundle.week)}"
+    )
+    h1 = (
+        f'{escape(bundle.repo)} — {escape(m["digest_word"])} '
+        f"{escape(bundle.week)}"
+    )
+
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="{escape(m["html_lang"])}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>x402-cms — {escape(bundle.repo)} digest {escape(bundle.week)}</title>
+<title>{title}</title>
 <link rel="stylesheet" href="/static/pico.classless.min.css">
 <link rel="stylesheet" href="/static/digest.css">
 </head>
 <body>
 <main>
-<h1>{escape(bundle.repo)} — digest {escape(bundle.week)}</h1>
-{week_nav}
+<h1>{h1}</h1>
+{masthead_nav}
 {snapshot}
-<nav aria-label="sections">
-<ul>
-<li><a href="#glance">Glance</a></li>
-<li><a href="#picks">Picks</a></li>
-<li><a href="#active">Active</a></li>
-<li><a href="#issues">Issues</a></li>
-<li><a href="#merged">Merged</a></li>
-<li><a href="#new">New</a></li>
-<li><a href="#x-posts">X posts</a></li>
-<li><a href="#japan">Japan</a></li>
-<li><a href="#cross-references">Cross-refs</a></li>
-<li><a href="#commentary">Commentary</a></li>
-</ul>
-</nav>
+{_nav(m)}
 {glance}
 {preface}
-<h2 id="picks">Picks <span class="count">{len(picks)}</span></h2>
+<h2 id="picks">{escape(m["sec_picks"])} <span class="count">{len(picks)}</span></h2>
 {picks_html}
 {sections}
 </main>

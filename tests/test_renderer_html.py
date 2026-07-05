@@ -327,4 +327,51 @@ class TestPageNavigation:
         bundle.week = "not-a-week"
         html = render_html(bundle)
         assert "not-a-week" in html
-        assert "/digest/not" not in html
+        # No computed prev / next links (their arrows are absent). The
+        # language toggle may still link to the same malformed week.
+        assert "←" not in html
+        assert "→" not in html
+
+
+class TestLocalisation:
+    """The Japanese chrome; the rows themselves stay in source language."""
+
+    def test_english_is_the_default(self) -> None:
+        html = render_html(_bundle())
+        assert '<html lang="en">' in html
+        assert "This week at a glance" in html
+
+    def test_japanese_localises_the_chrome(self) -> None:
+        html = render_html(_bundle(), lang="ja")
+        assert '<html lang="ja">' in html
+        assert "今週のまとめ" in html
+        assert "This week at a glance" not in html
+        assert '<span class="sname">アクティブな議論</span>' in html
+
+    def test_row_content_is_never_translated(self) -> None:
+        # A PR title is upstream source data — it stays as written even
+        # in the Japanese view.
+        html = render_html(
+            _bundle(prs=[_pr(1944, title="feat: TVM scheme")]), lang="ja"
+        )
+        assert "feat: TVM scheme" in html
+
+    def test_toggle_points_to_the_other_locale(self) -> None:
+        # Fixture week is 2026-W19.
+        en = render_html(_bundle())
+        assert 'class="langtoggle" href="/digest/2026-W19?lang=ja">日本語' in en
+        ja = render_html(_bundle(), lang="ja")
+        assert 'class="langtoggle" href="/digest/2026-W19">English' in ja
+
+    def test_week_nav_carries_the_locale_in_japanese(self) -> None:
+        # The chosen language persists across week navigation.
+        ja = render_html(_bundle(), lang="ja")
+        assert '<a href="/digest/2026-W20?lang=ja">' in ja
+        # English (the default) keeps clean, param-free week links.
+        en = render_html(_bundle())
+        assert '<a href="/digest/2026-W20">' in en
+
+    def test_unknown_lang_falls_back_to_english(self) -> None:
+        html = render_html(_bundle(), lang="fr")
+        assert '<html lang="en">' in html
+        assert "This week at a glance" in html
