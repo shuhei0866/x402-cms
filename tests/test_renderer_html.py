@@ -305,18 +305,17 @@ class TestPageNavigation:
     """Week links and the section nav that close the round-trip loop."""
 
     def test_week_nav_links_to_adjacent_weeks(self) -> None:
-        # The bundle fixture week is 2026-W19.
+        # The bundle fixture week is 2026-W19. Generated links pin the
+        # locale so the choice survives navigation on any browser.
         html = render_html(_bundle())
-        assert '<a href="/digest/2026-W18">' in html
-        assert '<a href="/digest/2026-W20">' in html
+        assert '<a href="/digest/2026-W18?lang=en">' in html
+        assert '<a href="/digest/2026-W20?lang=en">' in html
 
     def test_section_nav_targets_all_resolve_to_ids(self) -> None:
         # Every href="#…" in the nav must have a matching id on the
         # page — the integrity check that keeps the hub honest.
         html = render_html(_bundle())
-        nav = html[
-            html.index('<nav aria-label="sections">') : html.index("</nav>")
-        ]
+        nav = html[html.index('<nav class="sectionnav"') : html.index("</nav>")]
         targets = re.findall(r'href="#([\w-]+)"', nav)
         ids = set(re.findall(r'id="([\w-]+)"', html))
         assert len(targets) == 10
@@ -327,4 +326,64 @@ class TestPageNavigation:
         bundle.week = "not-a-week"
         html = render_html(bundle)
         assert "not-a-week" in html
-        assert "/digest/not" not in html
+        # No computed prev / next links (their arrows are absent). The
+        # language toggle may still link to the same malformed week.
+        assert "←" not in html
+        assert "→" not in html
+
+
+class TestLocalisation:
+    """The Japanese chrome; the rows themselves stay in source language."""
+
+    def test_english_is_the_default(self) -> None:
+        html = render_html(_bundle())
+        assert '<html lang="en">' in html
+        assert "This week at a glance" in html
+
+    def test_japanese_localises_the_chrome(self) -> None:
+        html = render_html(_bundle(), lang="ja")
+        assert '<html lang="ja">' in html
+        assert "今週のまとめ" in html
+        assert "This week at a glance" not in html
+        assert '<span class="sname">アクティブな議論</span>' in html
+
+    def test_row_content_is_never_translated(self) -> None:
+        # A PR title is upstream source data — it stays as written even
+        # in the Japanese view.
+        html = render_html(
+            _bundle(prs=[_pr(1944, title="feat: TVM scheme")]), lang="ja"
+        )
+        assert "feat: TVM scheme" in html
+
+    def test_toggle_points_to_the_other_locale(self) -> None:
+        # Fixture week is 2026-W19. The toggle pins the *other* locale
+        # explicitly, so it works even on an Accept-Language-selected
+        # page (a bare English link would resolve back to Japanese).
+        en = render_html(_bundle())
+        assert 'class="langtoggle" href="/digest/2026-W19?lang=ja">日本語' in en
+        ja = render_html(_bundle(), lang="ja")
+        assert 'class="langtoggle" href="/digest/2026-W19?lang=en">English' in ja
+
+    def test_week_nav_carries_the_locale_in_both_directions(self) -> None:
+        # The chosen language persists across week navigation, English
+        # included — a bare link would fall back to Accept-Language.
+        ja = render_html(_bundle(), lang="ja")
+        assert '<a href="/digest/2026-W20?lang=ja">' in ja
+        en = render_html(_bundle())
+        assert '<a href="/digest/2026-W20?lang=en">' in en
+
+    def test_unknown_lang_falls_back_to_english(self) -> None:
+        html = render_html(_bundle(), lang="fr")
+        assert '<html lang="en">' in html
+        assert "This week at a glance" in html
+
+    def test_nav_aria_label_is_localised_without_breaking_the_css_hook(
+        self,
+    ) -> None:
+        # The screen-reader label is chrome (localised); the CSS keys
+        # off the stable `sectionnav` class, not the aria-label.
+        en = render_html(_bundle())
+        assert '<nav class="sectionnav" aria-label="sections">' in en
+        ja = render_html(_bundle(), lang="ja")
+        assert 'class="sectionnav"' in ja
+        assert 'aria-label="セクション"' in ja

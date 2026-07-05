@@ -51,6 +51,10 @@ from code.renderers.digest import (
     render_agent_payload,
     render_html,
 )
+from code.renderers.digest.i18n import (
+    lang_from_accept_language,
+    normalize_lang,
+)
 from code.renderers.digest.topics import (
     TopicRule,
     XKeywordRule,
@@ -130,6 +134,20 @@ def _load_topics_safely(
         return load_topics_config(path)
     except FileNotFoundError:
         return [], []
+
+
+def _select_lang(request: Request) -> str:
+    """Pick the human-view locale: `?lang=` wins, else Accept-Language.
+
+    An explicit query param is honoured (so the toggle and deep links
+    are deterministic); otherwise the browser's primary Accept-Language
+    tag decides, defaulting to English. Only the chrome is localised —
+    the agent JSON path never consults this.
+    """
+    param = request.query_params.get("lang")
+    if param:
+        return normalize_lang(param)
+    return lang_from_accept_language(request.headers.get("accept-language"))
 
 
 def create_app() -> FastAPI:
@@ -224,7 +242,7 @@ def create_app() -> FastAPI:
                 topic_rules=topic_rules,
                 x_keywords=x_keywords,
             )
-            return HTMLResponse(render_html(bundle))
+            return HTMLResponse(render_html(bundle, lang=_select_lang(request)))
 
         adapter = FastAPIAdapter(request)
         context = HTTPRequestContext(

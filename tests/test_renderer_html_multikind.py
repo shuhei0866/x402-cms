@@ -122,7 +122,7 @@ class TestSectionsRender:
         html = render_html(
             _bundle(active_prs=[_active(2)], issues=[_issue(50)])
         )
-        hot = html[html.index("What's hot") : html.index("Where the talk is")]
+        hot = html[html.index("hot</h3>") : html.index("Where the talk is")]
         assert hot.index("#50") < hot.index("#2")
         # Heat numbers carry the count; the row is compact (no meta).
         assert '<span class="n">12</span>' in hot

@@ -35,12 +35,22 @@ h1 {
 }
 
 .weeknav {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem 1rem;
   font-family: var(--digest-mono);
   font-size: 0.85rem;
   margin: 0 0 1rem;
 }
 .weeknav a {
   text-decoration: none;
+}
+.weeknav .langtoggle {
+  margin-left: auto;
+  color: var(--pico-muted-color);
+}
+.weeknav .langtoggle:hover {
+  color: var(--pico-primary);
 }
 
 .snapshot {
@@ -65,7 +75,7 @@ h1 {
   opacity: 0.65;
 }
 
-nav[aria-label="sections"] ul {
+nav.sectionnav ul {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem 1rem;
@@ -75,14 +85,14 @@ nav[aria-label="sections"] ul {
   font-family: var(--digest-mono);
   font-size: 0.82rem;
 }
-nav[aria-label="sections"] li {
+nav.sectionnav li {
   padding: 0;
 }
-nav[aria-label="sections"] a {
+nav.sectionnav a {
   text-decoration: none;
   color: var(--pico-muted-color);
 }
-nav[aria-label="sections"] a:hover {
+nav.sectionnav a:hover {
   color: var(--pico-primary);
 }
 
