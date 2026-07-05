@@ -315,9 +315,7 @@ class TestPageNavigation:
         # Every href="#…" in the nav must have a matching id on the
         # page — the integrity check that keeps the hub honest.
         html = render_html(_bundle())
-        nav = html[
-            html.index('<nav aria-label="sections">') : html.index("</nav>")
-        ]
+        nav = html[html.index('<nav class="sectionnav"') : html.index("</nav>")]
         targets = re.findall(r'href="#([\w-]+)"', nav)
         ids = set(re.findall(r'id="([\w-]+)"', html))
         assert len(targets) == 10
@@ -378,3 +376,14 @@ class TestLocalisation:
         html = render_html(_bundle(), lang="fr")
         assert '<html lang="en">' in html
         assert "This week at a glance" in html
+
+    def test_nav_aria_label_is_localised_without_breaking_the_css_hook(
+        self,
+    ) -> None:
+        # The screen-reader label is chrome (localised); the CSS keys
+        # off the stable `sectionnav` class, not the aria-label.
+        en = render_html(_bundle())
+        assert '<nav class="sectionnav" aria-label="sections">' in en
+        ja = render_html(_bundle(), lang="ja")
+        assert 'class="sectionnav"' in ja
+        assert 'aria-label="セクション"' in ja

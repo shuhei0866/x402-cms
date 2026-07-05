@@ -566,7 +566,13 @@ def _nav(m: Messages) -> str:
     links = "\n".join(
         f'<li><a href="#{sid}">{escape(m[key])}</a></li>' for sid, key in items
     )
-    return f'<nav aria-label="sections">\n<ul>\n{links}\n</ul>\n</nav>'
+    # The class is the styling hook (see digest.css); the aria-label is
+    # localised chrome, so the two are kept separate — otherwise the
+    # Japanese label would break the CSS attribute selector.
+    return (
+        f'<nav class="sectionnav" aria-label="{escape(m["nav_aria"])}">\n'
+        f"<ul>\n{links}\n</ul>\n</nav>"
+    )
 
 
 # Progressive enhancement: open a collapsed section when it is the

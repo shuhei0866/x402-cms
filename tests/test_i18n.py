@@ -68,6 +68,13 @@ class TestFmtDateAndState:
         assert fmt_date(dt, messages("en")) == "Jul 4"
         assert fmt_date(dt, messages("ja")) == "7月4日"
 
+    def test_english_months_are_locale_independent(self) -> None:
+        # Fixed table, not strftime("%b") — so a non-English process
+        # locale can't leak a translated month into the English view.
+        en = messages("en")
+        assert fmt_date(datetime(2026, 1, 1, tzinfo=timezone.utc), en) == "Jan 1"
+        assert fmt_date(datetime(2026, 12, 31, tzinfo=timezone.utc), en) == "Dec 31"
+
     def test_state_word_localises_known_and_passes_unknown(self) -> None:
         ja = messages("ja")
         assert state_word("open", ja) == "オープン"

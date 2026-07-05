@@ -18,9 +18,18 @@ from datetime import datetime
 
 SUPPORTED = ("en", "ja")
 
+# Fixed English month abbreviations. `strftime("%b")` follows the
+# process LC_TIME, so a non-English runtime locale would leak localised
+# month names into the English view; this table keeps it deterministic.
+_EN_MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
 _EN: dict[str, str] = {
     "lang": "en",
     "html_lang": "en",
+    "nav_aria": "sections",
     "digest_word": "digest",
     # language toggle: text shown, and the lang it links to
     "toggle_text": "日本語",
@@ -102,6 +111,7 @@ _EN: dict[str, str] = {
 _JA: dict[str, str] = {
     "lang": "ja",
     "html_lang": "ja",
+    "nav_aria": "セクション",
     "digest_word": "ダイジェスト",
     "toggle_text": "English",
     "toggle_to": "en",
@@ -197,10 +207,15 @@ def messages(lang: str) -> dict[str, str]:
 
 
 def fmt_date(dt: datetime, m: dict[str, str]) -> str:
-    """`Jul 4` (en) / `7月4日` (ja). Manual to dodge platform `%-d`."""
+    """`Jul 4` (en) / `7月4日` (ja).
+
+    Built by hand rather than `strftime` — `%-d` is not portable and
+    `%b` follows the process locale, either of which could distort the
+    date; the fixed month table keeps English deterministic.
+    """
     if m["lang"] == "ja":
         return f"{dt.month}月{dt.day}日"
-    return f"{dt:%b} {dt.day}"
+    return f"{_EN_MONTHS[dt.month - 1]} {dt.day}"
 
 
 def state_word(state: str, m: dict[str, str]) -> str:
