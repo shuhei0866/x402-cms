@@ -63,7 +63,10 @@ class TestJapanSectionHtml:
             },
         )
         html = render_html(bundle)
-        assert "Japan community (2)" in html
+        assert (
+            '<span class="sname">Japan community</span> '
+            '<span class="count">2</span>'
+        ) in html
         # The JP section lists the two JP posts, not the protocol_core
         # post.
         assert "@0x_natto" in html
@@ -87,7 +90,10 @@ class TestJapanSectionHtml:
             handle_clusters={"base": "protocol_core"},
         )
         html = render_html(bundle)
-        assert "Japan community (0)" in html
+        assert (
+            '<span class="sname">Japan community</span> '
+            '<span class="count">0</span>'
+        ) in html
         assert "No Japan community posts this week" in html
 
     def test_no_handle_clusters_still_renders_empty_jp_section(self) -> None:

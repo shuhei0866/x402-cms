@@ -164,9 +164,11 @@ class TestSanitisationAndRegression:
     def test_script_in_commentary_body_is_stripped(self) -> None:
         c = _c("xss", week_level=True, body_md="ok <script>alert(1)</script> done")
         html = render_html(_bundle(commentaries=[c]))
-        # No script tag in any form reaches the page (escaped to an
-        # inert entity by the md renderer, and nh3 as a second layer).
-        assert "<script" not in html
+        # The user-supplied script never reaches the page as markup
+        # (escaped by the md renderer, and nh3 as a second layer). The
+        # page's own trusted hash-open script is the only <script>.
+        assert "alert(1)" not in html
+        assert "<script>alert" not in html
 
     def test_pr_title_still_escaped(self) -> None:
         pr = _pr(1)
