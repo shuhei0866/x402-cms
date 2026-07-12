@@ -19,7 +19,9 @@ title: <one-line title>     # required
 published: false            # flip to true to publish; false = unpublish; delete: true = retract
 
 # Exactly one of the following two shapes:
-#  (a) week preface — the overview note for the week:
+#  (a) week preface — the publication record and overview for the week.
+#      Exactly one published week-level note is allowed per week. Home,
+#      archive, and gap-aware navigation only surface weeks with this record:
 # week_level: true
 #  (b) per-item note — must target at least one item:
 target_refs:

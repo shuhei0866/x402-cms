@@ -43,15 +43,18 @@ def _publish_md(
     rank: int | None = None,
     tldr: str | None = None,
     published_at: str | None = None,
+    week_level: bool = False,
 ) -> str:
     lines = [
         "---",
         f"week: {week}",
         f"title: {title}",
         "published: true",
-        "target_refs:",
-        "  - pr:x402-foundation/x402#1944",
     ]
+    if week_level:
+        lines.append("week_level: true")
+    else:
+        lines += ["target_refs:", "  - pr:x402-foundation/x402#1944"]
     if rank is not None:
         lines.append(f"recommended_rank: {rank}")
     if tldr is not None:
@@ -186,15 +189,35 @@ class TestRankUniqueness:
         assert result["published"] == 2
 
 
+class TestWeekLevelUniqueness:
+    def test_duplicate_week_level_same_week_fails_before_any_write(
+        self, tmp_path: Path
+    ) -> None:
+        _write(
+            tmp_path,
+            "2026-W19-preface-a.md",
+            _publish_md(title="First preface", week_level=True),
+        )
+        _write(
+            tmp_path,
+            "2026-W19-preface-b.md",
+            _publish_md(title="Second preface", week_level=True),
+        )
+        client = MagicMock()
+
+        with pytest.raises(PublishError, match="week-level commentary"):
+            publish_vault_dir(tmp_path, client=client, now=NOW)
+
+        client.collection.assert_not_called()
+
+
 class TestDryRun:
     def test_dry_run_reports_but_does_not_write(self, tmp_path: Path) -> None:
         _write(tmp_path, "2026-W19-a.md", _publish_md())
         _write(tmp_path, "2026-W19-d.md", "---\ndelete: true\n---\n")
         client = MagicMock()
 
-        result = publish_vault_dir(
-            tmp_path, client=client, now=NOW, dry_run=True
-        )
+        result = publish_vault_dir(tmp_path, client=client, now=NOW, dry_run=True)
 
         assert result["published"] == 1
         assert result["deleted"] == 1

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from code.renderers.digest.i18n import (
     SUPPORTED,
     fmt_date,
+    fmt_week_range,
     lang_from_accept_language,
     messages,
     normalize_lang,
@@ -81,3 +82,13 @@ class TestFmtDateAndState:
         assert state_word("closed", ja) == "クローズ"
         # An unrecognised state token passes through untouched.
         assert state_word("weird", ja) == "weird"
+
+    def test_week_range_uses_calendar_dates_instead_of_iso_week(self) -> None:
+        assert fmt_week_range("2026-W28", messages("en")) == "Jul 6–12, 2026"
+        assert fmt_week_range("2026-W28", messages("ja")) == "2026年7月6日〜7月12日"
+
+    def test_week_range_handles_year_boundary(self) -> None:
+        assert fmt_week_range("2026-W01", messages("en")) == "Dec 29, 2025–Jan 4, 2026"
+        assert (
+            fmt_week_range("2026-W01", messages("ja")) == "2025年12月29日〜2026年1月4日"
+        )

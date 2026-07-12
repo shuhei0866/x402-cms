@@ -124,6 +124,20 @@ class DigestBundle:
     x_keywords: list[XKeywordRule] = field(default_factory=list)
 
 
+def digest_has_content(bundle: DigestBundle) -> bool:
+    """Whether a human digest has any source or editorial material."""
+    return any(
+        (
+            bundle.prs,
+            bundle.active_prs,
+            bundle.new_prs,
+            bundle.issues,
+            bundle.x_posts,
+            bundle.commentaries,
+        )
+    )
+
+
 def load_digest_bundle(
     week: str,
     *,

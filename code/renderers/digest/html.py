@@ -64,10 +64,12 @@ from code.renderers.digest.bundle import (
 )
 from code.renderers.digest.i18n import (
     fmt_date,
+    fmt_week_range,
     messages,
     normalize_lang,
     state_word,
 )
+from code.renderers.digest.publication import PublishedEdition
 from code.renderers.digest.topics import classify_title, count_x_keyword_hits
 from code.schemas.commentary import Commentary
 from code.schemas.issue import IssueRecord
@@ -100,12 +102,9 @@ def _single_target_index(
     return index
 
 
-def _blockquotes_for(
-    ref: str, single_idx: dict[str, list[Commentary]]
-) -> str:
+def _blockquotes_for(ref: str, single_idx: dict[str, list[Commentary]]) -> str:
     return "".join(
-        f'<blockquote id="commentary-{escape(c.slug)}">'
-        f"{_md_to_safe_html(c.body_md)}</blockquote>"
+        f'<blockquote id="commentary-{escape(c.slug)}">{_md_to_safe_html(c.body_md)}</blockquote>'
         for c in single_idx.get(ref, [])
     )
 
@@ -133,8 +132,15 @@ def _meta(*parts: str) -> str:
     return " · ".join(p for p in parts if p)
 
 
-def _row(mark: str, url: str, id_label: str, title: str, meta: str, bq: str = "",
-         cls: str = "") -> str:
+def _row(
+    mark: str,
+    url: str,
+    id_label: str,
+    title: str,
+    meta: str,
+    bq: str = "",
+    cls: str = "",
+) -> str:
     """One activity row: mark cell + (id · title · meta) + inline note."""
     row_cls = f"row {cls}".strip()
     return (
@@ -179,9 +185,7 @@ def _active_row(
     )
 
 
-def _new_row(
-    pr: PRRecord, single_idx: dict[str, list[Commentary]], m: Messages
-) -> str:
+def _new_row(pr: PRRecord, single_idx: dict[str, list[Commentary]], m: Messages) -> str:
     bq = _blockquotes_for(f"pr:{pr.repo}#{pr.pr_number}", single_idx)
     when = (
         m["when_opened"].format(d=escape(fmt_date(pr.created_at, m)))
@@ -190,7 +194,13 @@ def _new_row(
     )
     meta = _meta(f"@{escape(pr.author)}", escape(state_word(pr.status, m)), when)
     return _row(
-        _tag_mark(m["tag_new"]), pr.url, f"#{pr.pr_number}", pr.title, meta, bq, "settled"
+        _tag_mark(m["tag_new"]),
+        pr.url,
+        f"#{pr.pr_number}",
+        pr.title,
+        meta,
+        bq,
+        "settled",
     )
 
 
@@ -299,9 +309,7 @@ def _posts_section_body(
         by_handle.items(), key=lambda kv: len(kv[1]), reverse=True
     ):
         items = "\n".join(_x_row(p, single_idx) for p in handle_posts)
-        summary = m["fold_replies"].format(
-            handle=escape(handle), n=len(handle_posts)
-        )
+        summary = m["fold_replies"].format(handle=escape(handle), n=len(handle_posts))
         body += (
             f"\n<details><summary>{summary}</summary>\n"
             f'<ul class="xposts">\n{items}\n</ul>\n</details>'
@@ -363,9 +371,7 @@ def _activity_phrase(counts: Counter[str], m: Messages) -> str:
             ("issues", "issue"),
         )
         return " · ".join(f"{lbl} {counts[k]}" for k, lbl in labels if counts[k])
-    parts = [
-        f"{counts[k]} {k}" for k in ("merged", "active", "opened") if counts[k]
-    ]
+    parts = [f"{counts[k]} {k}" for k in ("merged", "active", "opened") if counts[k]]
     if counts["issues"]:
         n = counts["issues"]
         parts.append(f"{n} issue" + ("s" if n != 1 else ""))
@@ -419,9 +425,7 @@ def _glance_movers(bundle: DigestBundle, m: Messages) -> str:
     top_posts, _ = _split_top_level(bundle.x_posts)
     x_counts = Counter(p.author_handle for p in top_posts)
     if x_counts:
-        x_movers = " · ".join(
-            f"@{escape(h)} {n}" for h, n in x_counts.most_common(6)
-        )
+        x_movers = " · ".join(f"@{escape(h)} {n}" for h, n in x_counts.most_common(6))
         movers += (
             f'<p class="foot"><span class="mono">{escape(m["x_movers_prefix"])} '
             f"{x_movers}</span></p>"
@@ -438,10 +442,7 @@ def _glance_hot(bundle: DigestBundle, m: Messages) -> str:
     hot.sort(key=lambda t: t[0], reverse=True)
 
     if not hot:
-        body = (
-            '<ul class="rows compact"><li class="empty">'
-            f'{escape(m["empty_hot"])}</li></ul>'
-        )
+        body = f'<ul class="rows compact"><li class="empty">{escape(m["empty_hot"])}</li></ul>'
     else:
         ceiling = hot[0][0]
         rows = "\n".join(
@@ -477,10 +478,7 @@ def _glance_talk(bundle: DigestBundle, m: Messages) -> str:
             f"{_dist_rows(pairs)}</div>"
         )
     else:
-        groups += (
-            '<div class="distgroup"><p class="foot">'
-            f'{escape(m["topics_unavailable"])}</p></div>'
-        )
+        groups += f'<div class="distgroup"><p class="foot">{escape(m["topics_unavailable"])}</p></div>'
 
     cluster_counter: dict[str, Counter[str]] = defaultdict(Counter)
     for post in bundle.x_posts:
@@ -603,7 +601,12 @@ def _lang_query(lang: str) -> str:
     return f"?lang={lang}"
 
 
-def render_html(bundle: DigestBundle, lang: str = "en") -> str:
+def render_html(
+    bundle: DigestBundle,
+    lang: str = "en",
+    *,
+    published_editions: list[PublishedEdition] | None = None,
+) -> str:
     """Render the human-facing HTML view for a digest week.
 
     `lang` selects the chrome locale (`en` default, `ja` supported);
@@ -625,12 +628,12 @@ def render_html(bundle: DigestBundle, lang: str = "en") -> str:
     if picks:
         pick_items = "\n".join(
             f'<li><a href="#commentary-{escape(c.slug)}">{escape(c.title)}</a>'
-            f' — {escape(c.tldr or "")}</li>'
+            f" — {escape(c.tldr or '')}</li>"
             for c in picks
         )
         picks_html = f"<ol>\n{pick_items}\n</ol>"
     else:
-        picks_html = f'<p>{escape(m["empty_picks"])}</p>'
+        picks_html = f"<p>{escape(m['empty_picks'])}</p>"
 
     active_body = _active_section_body(bundle.active_prs, single_idx, m)
     issues_body = _issues_section_body(bundle.issues, m)
@@ -638,36 +641,55 @@ def render_html(bundle: DigestBundle, lang: str = "en") -> str:
     new_body = _new_prs_section_body(bundle.new_prs, single_idx, m)
     x_body = _posts_section_body(bundle.x_posts, single_idx, m["empty_xposts"], m)
 
-    jp_posts = posts_in_cluster(
-        bundle.x_posts, bundle.handle_clusters, JAPAN_CLUSTER
-    )
+    jp_posts = posts_in_cluster(bundle.x_posts, bundle.handle_clusters, JAPAN_CLUSTER)
     jp_body = _posts_section_body(jp_posts, single_idx, m["empty_japan"], m)
 
     top_posts, reply_posts = _split_top_level(bundle.x_posts)
     replies = m["snap_replies"].format(n=len(reply_posts))
     snapshot = (
         '<div class="snapshot">'
-        f'<span><b>{len(bundle.prs)}</b> {escape(m["snap_merged"])}</span>'
-        f'<span><b>{len(bundle.active_prs)}</b> {escape(m["snap_active"])}</span>'
-        f'<span><b>{len(bundle.new_prs)}</b> {escape(m["snap_new"])}</span>'
-        f'<span><b>{len(bundle.issues)}</b> {escape(m["snap_issues"])}</span>'
-        f'<span><b>{len(top_posts)}</b> {escape(m["snap_xposts"])} '
+        f"<span><b>{len(bundle.prs)}</b> {escape(m['snap_merged'])}</span>"
+        f"<span><b>{len(bundle.active_prs)}</b> {escape(m['snap_active'])}</span>"
+        f"<span><b>{len(bundle.new_prs)}</b> {escape(m['snap_new'])}</span>"
+        f"<span><b>{len(bundle.issues)}</b> {escape(m['snap_issues'])}</span>"
+        f"<span><b>{len(top_posts)}</b> {escape(m['snap_xposts'])} "
         f"<em>{escape(replies)}</em></span>"
         "</div>"
     )
     glance = _glance_html(bundle, m)
 
-    # Adjacent-week links; a malformed week label (the route accepts
-    # any string) renders the page without them instead of failing.
-    try:
-        prev_week = shift_iso_week(bundle.week, -1)
-        next_week = shift_iso_week(bundle.week, 1)
-        week_nav = (
-            f'<a href="/digest/{escape(prev_week)}{q}">← {escape(prev_week)}</a> · '
-            f'<a href="/digest/{escape(next_week)}{q}">{escape(next_week)} →</a>'
-        )
-    except ValueError:
-        week_nav = ""
+    # When the publication index is available, navigate actual editorial
+    # editions and skip gaps. Falling back to ISO-week arithmetic keeps the
+    # pure renderer and existing callers backward compatible.
+    if published_editions is not None:
+        weeks = [edition.week for edition in published_editions]
+        links: list[str] = []
+        if bundle.week in weeks:
+            index = weeks.index(bundle.week)
+            older = published_editions[index + 1] if index + 1 < len(weeks) else None
+            newer = published_editions[index - 1] if index > 0 else None
+            if older:
+                links.append(
+                    f'<a href="/digest/{escape(older.week)}{q}">← '
+                    f"{escape(fmt_week_range(older.week, m))}</a>"
+                )
+            if newer:
+                links.append(
+                    f'<a href="/digest/{escape(newer.week)}{q}">'
+                    f"{escape(fmt_week_range(newer.week, m))} →</a>"
+                )
+        links.append(f'<a href="/archive{q}">{escape(m["archive_title"])}</a>')
+        week_nav = " · ".join(links)
+    else:
+        try:
+            prev_week = shift_iso_week(bundle.week, -1)
+            next_week = shift_iso_week(bundle.week, 1)
+            week_nav = (
+                f'<a href="/digest/{escape(prev_week)}{q}">← {escape(prev_week)}</a> · '
+                f'<a href="/digest/{escape(next_week)}{q}">{escape(next_week)} →</a>'
+            )
+        except ValueError:
+            week_nav = ""
 
     toggle = (
         f'<a class="langtoggle" href="/digest/{escape(bundle.week)}'
@@ -675,15 +697,14 @@ def render_html(bundle: DigestBundle, lang: str = "en") -> str:
     )
     masthead_nav = f'<p class="weeknav">{week_nav}{toggle}</p>'
 
-    cross_items = "\n".join(
-        _html_cross_item(cr, m) for cr in bundle.cross_references
-    ) or f'<li class="empty">{escape(m["empty_cross"])}</li>'
+    cross_items = (
+        "\n".join(_html_cross_item(cr, m) for cr in bundle.cross_references)
+        or f'<li class="empty">{escape(m["empty_cross"])}</li>'
+    )
     cross_body = f'<ul class="rows">\n{cross_items}\n</ul>'
 
     multi = [
-        c
-        for c in bundle.commentaries
-        if not c.week_level and len(c.target_refs) >= 2
+        c for c in bundle.commentaries if not c.week_level and len(c.target_refs) >= 2
     ]
     if multi:
         multi_html = "\n".join(
@@ -713,13 +734,19 @@ def render_html(bundle: DigestBundle, lang: str = "en") -> str:
         )
     )
 
-    title = (
-        f'x402-cms — {escape(bundle.repo)} {escape(m["digest_word"])} '
-        f"{escape(bundle.week)}"
+    week_note = next((c for c in bundle.commentaries if c.week_level), None)
+    fallback_heading = (
+        f"{escape(bundle.repo)} — {escape(m['digest_word'])} {escape(bundle.week)}"
     )
-    h1 = (
-        f'{escape(bundle.repo)} — {escape(m["digest_word"])} '
-        f"{escape(bundle.week)}"
+    heading = escape(week_note.title) if week_note else fallback_heading
+    title = f"x402-cms — {heading}"
+    try:
+        date_range = fmt_week_range(bundle.week, m)
+    except ValueError:
+        date_range = bundle.week
+    edition_meta = (
+        f'<p class="editionmeta">{escape(date_range)} · '
+        f'<span class="weekcode">{escape(bundle.week)}</span></p>'
     )
 
     return f"""<!DOCTYPE html>
@@ -733,7 +760,8 @@ def render_html(bundle: DigestBundle, lang: str = "en") -> str:
 </head>
 <body>
 <main>
-<h1>{h1}</h1>
+<h1>{heading}</h1>
+{edition_meta}
 {masthead_nav}
 {snapshot}
 {_nav(m)}

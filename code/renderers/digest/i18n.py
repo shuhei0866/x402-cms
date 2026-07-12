@@ -14,7 +14,9 @@ before i18n, so the default output is byte-identical.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from code.utils.dates import parse_iso_week
 
 SUPPORTED = ("en", "ja")
 
@@ -22,8 +24,18 @@ SUPPORTED = ("en", "ja")
 # process LC_TIME, so a non-English runtime locale would leak localised
 # month names into the English view; this table keeps it deterministic.
 _EN_MONTHS = (
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 )
 
 _EN: dict[str, str] = {
@@ -31,6 +43,14 @@ _EN: dict[str, str] = {
     "html_lang": "en",
     "nav_aria": "sections",
     "digest_word": "digest",
+    "archive_title": "Archive",
+    "archive_link": "View archive",
+    "latest_edition": "Latest edition",
+    "latest_link": "Read the latest edition",
+    "recent_editions": "Recent editions",
+    "site_tagline": "x402 changes, edited for implementation decisions",
+    "empty_editions": "No published editions yet.",
+    "edition_not_found": "This edition is not published.",
     # language toggle: text shown, and the lang it links to
     "toggle_text": "日本語",
     "toggle_to": "ja",
@@ -113,6 +133,14 @@ _JA: dict[str, str] = {
     "html_lang": "ja",
     "nav_aria": "セクション",
     "digest_word": "ダイジェスト",
+    "archive_title": "記事一覧",
+    "archive_link": "記事一覧へ",
+    "latest_edition": "最新号",
+    "latest_link": "最新号を読む",
+    "recent_editions": "最近の記事",
+    "site_tagline": "x402の変化を、実装の論点に変える",
+    "empty_editions": "公開済みの記事はまだありません。",
+    "edition_not_found": "この週の記事は公開していません。",
     "toggle_text": "English",
     "toggle_to": "en",
     "sec_picks": "ピック",
@@ -216,6 +244,29 @@ def fmt_date(dt: datetime, m: dict[str, str]) -> str:
     if m["lang"] == "ja":
         return f"{dt.month}月{dt.day}日"
     return f"{_EN_MONTHS[dt.month - 1]} {dt.day}"
+
+
+def fmt_week_range(week: str, m: dict[str, str]) -> str:
+    """Human calendar range for an ISO week label."""
+    start, end_exclusive = parse_iso_week(week)
+    end = end_exclusive - timedelta(days=1)
+    if m["lang"] == "ja":
+        if start.year == end.year:
+            return (
+                f"{start.year}年{start.month}月{start.day}日〜{end.month}月{end.day}日"
+            )
+        return f"{start.year}年{start.month}月{start.day}日〜{end.year}年{end.month}月{end.day}日"
+    if start.year == end.year and start.month == end.month:
+        return f"{_EN_MONTHS[start.month - 1]} {start.day}–{end.day}, {start.year}"
+    if start.year == end.year:
+        return (
+            f"{_EN_MONTHS[start.month - 1]} {start.day}–"
+            f"{_EN_MONTHS[end.month - 1]} {end.day}, {start.year}"
+        )
+    return (
+        f"{_EN_MONTHS[start.month - 1]} {start.day}, {start.year}–"
+        f"{_EN_MONTHS[end.month - 1]} {end.day}, {end.year}"
+    )
 
 
 def state_word(state: str, m: dict[str, str]) -> str:

@@ -22,6 +22,7 @@ from code.renderers.digest import (
     X_COLLECTION,
     CrossReference,
     DigestBundle,
+    digest_has_content,
     load_digest_bundle,
 )
 
@@ -136,8 +137,8 @@ def _client_with_two_collections(
 
     def _coll(payloads: list[dict]) -> MagicMock:
         coll = MagicMock()
-        coll.where.return_value.stream.side_effect = (
-            lambda *a, **k: iter(_docs(payloads))
+        coll.where.return_value.stream.side_effect = lambda *a, **k: iter(
+            _docs(payloads)
         )
         return coll
 
@@ -189,6 +190,27 @@ class TestDigestBundle:
             handle_clusters={"0x_natto": "japan"},
         )
         assert bundle.handle_clusters == {"0x_natto": "japan"}
+
+    def test_content_detection_covers_every_rendered_collection(self) -> None:
+        content_fields = (
+            "prs",
+            "active_prs",
+            "new_prs",
+            "issues",
+            "x_posts",
+            "commentaries",
+        )
+        for field_name in content_fields:
+            bundle = DigestBundle(
+                week="2026-W19",
+                repo="x402-foundation/x402",
+                prs=[],
+                x_posts=[],
+                cross_references=[],
+            )
+            assert digest_has_content(bundle) is False
+            setattr(bundle, field_name, [object()])
+            assert digest_has_content(bundle) is True
 
 
 class TestLoadDigestBundle:

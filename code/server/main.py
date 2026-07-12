@@ -47,9 +47,14 @@ from code.indexers.x_indexer import load_handle_clusters
 from code.observability import access_log_middleware, configure_logging
 from code.renderers.digest import (
     DEFAULT_REPO,
+    digest_has_content,
     load_digest_bundle,
+    read_published_editions,
     render_agent_payload,
+    render_archive,
     render_html,
+    render_home,
+    render_not_found,
 )
 from code.renderers.digest.i18n import (
     lang_from_accept_language,
@@ -93,16 +98,12 @@ def _load_config() -> ServerConfig:
         raise ValueError("EVM_ADDRESS is required in .env")
     return ServerConfig(
         evm_address=evm_address,
-        facilitator_url=os.getenv(
-            "FACILITATOR_URL", "https://x402.org/facilitator"
-        ),
+        facilitator_url=os.getenv("FACILITATOR_URL", "https://x402.org/facilitator"),
         gcp_project=os.getenv("GOOGLE_CLOUD_PROJECT"),
         handles_config_path=os.getenv(
             "HANDLES_CONFIG_PATH", DEFAULT_HANDLES_CONFIG_PATH
         ),
-        topics_config_path=os.getenv(
-            "TOPICS_CONFIG_PATH", DEFAULT_TOPICS_CONFIG_PATH
-        ),
+        topics_config_path=os.getenv("TOPICS_CONFIG_PATH", DEFAULT_TOPICS_CONFIG_PATH),
     )
 
 
@@ -206,23 +207,47 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/")
-    async def root() -> dict:
-        """Free landing endpoint that advertises the digest route."""
-        return {
-            "name": "x402-cms",
-            "version": "0.1.0",
-            "phase": "phase-1",
-            "description": (
-                "Agent-oriented CMS — same URL, free HTML for humans / "
-                "paid JSON for agents"
-            ),
-            "endpoints": {
-                "GET /digest/{week}": (
-                    "free HTML for humans, $0.05 USDC paid JSON for agents "
-                    "(Base Sepolia)"
+    async def root(request: Request) -> Response:
+        """Human editorial home; machine-readable service description."""
+        if not is_agent_request(request.headers):
+            editions = read_published_editions(project=config.gcp_project)
+            return HTMLResponse(render_home(editions, lang=_select_lang(request)))
+        return JSONResponse(
+            content={
+                "name": "x402-cms",
+                "version": "0.1.0",
+                "phase": "phase-1",
+                "description": (
+                    "Agent-oriented CMS — same URL, free HTML for humans / paid JSON for agents"
                 ),
-            },
-        }
+                "endpoints": {
+                    "GET /digest/{week}": (
+                        "free HTML for humans, $0.05 USDC paid JSON for agents (Base Sepolia)"
+                    ),
+                },
+            }
+        )
+
+    @app.get("/archive")
+    async def archive(request: Request) -> Response:
+        """Published editorial editions, newest first."""
+        editions = read_published_editions(project=config.gcp_project)
+        if not is_agent_request(request.headers):
+            return HTMLResponse(render_archive(editions, lang=_select_lang(request)))
+        return JSONResponse(
+            content=[
+                {
+                    "week": edition.week,
+                    "title": edition.title,
+                    "published_at": (
+                        edition.published_at.isoformat()
+                        if edition.published_at
+                        else None
+                    ),
+                }
+                for edition in editions
+            ]
+        )
 
     @app.get("/digest/{week}")
     async def digest(week: str, request: Request) -> Response:
@@ -234,6 +259,7 @@ def create_app() -> FastAPI:
         the User-Agent header.
         """
         if not is_agent_request(request.headers):
+            editions = read_published_editions(project=config.gcp_project)
             bundle = load_digest_bundle(
                 week,
                 repo=DEFAULT_REPO,
@@ -242,7 +268,19 @@ def create_app() -> FastAPI:
                 topic_rules=topic_rules,
                 x_keywords=x_keywords,
             )
-            return HTMLResponse(render_html(bundle, lang=_select_lang(request)))
+            lang = _select_lang(request)
+            if not digest_has_content(bundle):
+                return HTMLResponse(
+                    render_not_found(week, editions, lang=lang),
+                    status_code=404,
+                )
+            return HTMLResponse(
+                render_html(
+                    bundle,
+                    lang=lang,
+                    published_editions=editions,
+                )
+            )
 
         adapter = FastAPIAdapter(request)
         context = HTTPRequestContext(

@@ -9,9 +9,10 @@ HTML、AI agent には HTTP 402 + x402 プロトコル経由で有料 JSON。
 Phase 0〜4 が本番稼働中。Phase 5 (mainnet 化 + batch-settlement scheme への
 切替) はロードマップに残っている。現状の決済は **Base Sepolia testnet の
 USDC** を `x402.org/facilitator` 経由で扱う。人間向け view は情報設計を
-一巡済み: ファーストビューのダッシュボード (This week at a glance)、
-議論が熱い順のセクション構成、量の多い content の機械的な折りたたみ、
-ページ内ナビゲーションを備える。
+一巡済み: 公開済み記事のトップと一覧、日付中心のedition metadata、
+ファーストビューのダッシュボード (This week at a glance)、議論が熱い順の
+セクション構成、量の多い content の機械的な折りたたみ、空weekを飛ばす
+ページナビゲーションを備える。
 
 ## 1. システム全体像
 
