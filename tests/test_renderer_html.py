@@ -12,7 +12,12 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from code.renderers.digest import CrossReference, DigestBundle, render_html
+from code.renderers.digest import (
+    CrossReference,
+    DigestBundle,
+    PublishedEdition,
+    render_html,
+)
 from code.renderers.digest.topics import TopicRule, XKeywordRule
 from code.schemas.pr import MergedPR
 from code.schemas.x_post import XPost
@@ -84,7 +89,9 @@ class TestRenderHtml:
         assert "Cross-references" in html
 
     def test_pr_item_carries_number_title_author(self) -> None:
-        html = render_html(_bundle(prs=[_pr(1944, title="feat: TVM scheme", author="ArkadiyStena")]))
+        html = render_html(
+            _bundle(prs=[_pr(1944, title="feat: TVM scheme", author="ArkadiyStena")])
+        )
         assert "#1944" in html
         assert "feat: TVM scheme" in html
         assert "ArkadiyStena" in html
@@ -101,7 +108,9 @@ class TestRenderHtml:
             prs=[_pr(1944)],
             x_posts=[_post("12345")],
             cross_references=[
-                CrossReference(pr_ref="x402-foundation/x402#1944", x_post_ids=["12345"]),
+                CrossReference(
+                    pr_ref="x402-foundation/x402#1944", x_post_ids=["12345"]
+                ),
             ],
         )
         html = render_html(bundle)
@@ -130,10 +139,7 @@ class TestRenderHtml:
         # The human view is styled by the vendored classless Pico
         # stylesheet; the markup itself stays class-free.
         html = render_html(_bundle())
-        assert (
-            '<link rel="stylesheet" href="/static/pico.classless.min.css">'
-            in html
-        )
+        assert '<link rel="stylesheet" href="/static/pico.classless.min.css">' in html
         assert '<meta name="viewport"' in html
 
     def test_body_content_is_wrapped_in_main(self) -> None:
@@ -176,7 +182,7 @@ class TestRenderHtml:
         # Progressive enhancement so a nav / deep link opens its target
         # section. The page still works with no JS.
         html = render_html(_bundle())
-        assert "addEventListener(\"hashchange\", openTarget)" in html
+        assert 'addEventListener("hashchange", openTarget)' in html
 
 
 class TestInformationDesign:
@@ -241,10 +247,7 @@ class TestGlance:
 
     def test_glance_sits_between_snapshot_and_picks(self) -> None:
         html = render_html(_bundle())
-        assert (
-            html.index("This week at a glance")
-            < html.index('<h2 id="picks">Picks')
-        )
+        assert html.index("This week at a glance") < html.index('<h2 id="picks">Picks')
 
     def test_actor_table_folds_bots_into_footnote(self) -> None:
         prs = [
@@ -310,6 +313,19 @@ class TestPageNavigation:
         html = render_html(_bundle())
         assert '<a href="/digest/2026-W18?lang=en">' in html
         assert '<a href="/digest/2026-W20?lang=en">' in html
+
+    def test_published_navigation_skips_week_gaps(self) -> None:
+        editions = [
+            PublishedEdition("2026-W20", "Newer", None),
+            PublishedEdition("2026-W19", "Current", None),
+            PublishedEdition("2026-W15", "Older", None),
+        ]
+
+        html = render_html(_bundle(), published_editions=editions)
+
+        assert "/digest/2026-W15?lang=en" in html
+        assert "/digest/2026-W20?lang=en" in html
+        assert "/digest/2026-W18" not in html
 
     def test_section_nav_targets_all_resolve_to_ids(self) -> None:
         # Every href="#…" in the nav must have a matching id on the

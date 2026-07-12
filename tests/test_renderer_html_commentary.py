@@ -59,7 +59,9 @@ def _c(
     if week_level:
         refs: list[str] = []
     else:
-        refs = target_refs if target_refs is not None else ["pr:x402-foundation/x402#1944"]
+        refs = (
+            target_refs if target_refs is not None else ["pr:x402-foundation/x402#1944"]
+        )
     return Commentary(
         slug=slug,
         week="2026-W19",
@@ -101,6 +103,18 @@ class TestWeekPreface:
         html = render_html(_bundle(prs=[_pr(1)]))
         assert "preface" not in html.lower()
 
+    def test_week_level_title_leads_with_date_range_and_week_as_metadata(
+        self,
+    ) -> None:
+        c = _c("preface", week_level=True)
+        c.title = "The operational design after payment"
+
+        html = render_html(_bundle(commentaries=[c]))
+
+        assert "<h1>The operational design after payment</h1>" in html
+        assert "May 4–10, 2026" in html
+        assert '<span class="weekcode">2026-W19</span>' in html
+
 
 class TestPicks:
     def test_recommended_render_as_ordered_list_by_rank(self) -> None:
@@ -124,7 +138,9 @@ class TestPicks:
 class TestInlineBlockquote:
     def test_single_target_commentary_blockquotes_on_its_pr(self) -> None:
         pr = _pr(1944)
-        c = _c("note", target_refs=["pr:x402-foundation/x402#1944"], body_md="worth noting")
+        c = _c(
+            "note", target_refs=["pr:x402-foundation/x402#1944"], body_md="worth noting"
+        )
         html = render_html(_bundle(prs=[pr], commentaries=[c]))
         # `<blockquote id="commentary-…">` — match the open tag, not a
         # bare one; the id is the anchor a recommended pick links to.

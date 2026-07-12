@@ -28,8 +28,7 @@ from code.utils.firestore import build_client
 COMMENTARY_COLLECTION = "commentary"
 
 DEFAULT_VAULT_DIR = (
-    Path.home()
-    / "Documents/life_value_lab/personal_works/my_vault/x402_digest/views"
+    Path.home() / "Documents/life_value_lab/personal_works/my_vault/x402_digest/views"
 )
 
 
@@ -54,10 +53,20 @@ def publish_vault_dir(
     # Cross-file invariant: within a week, recommended_rank is unique.
     # Checked before any write so a collision is atomic-fail.
     seen_ranks: dict[tuple[str, int], str] = {}
+    seen_week_level: dict[str, str] = {}
     for pf in parsed:
         if pf.action != "publish" or pf.commentary is None:
             continue
         rank = pf.commentary.recommended_rank
+        if pf.commentary.week_level:
+            week = pf.commentary.week
+            if week in seen_week_level:
+                raise PublishError(
+                    "duplicate week-level commentary in week "
+                    f"{week}: '{seen_week_level[week]}' and "
+                    f"'{pf.commentary.slug}'"
+                )
+            seen_week_level[week] = pf.commentary.slug
         if rank is None:
             continue
         key = (pf.commentary.week, rank)
@@ -92,9 +101,7 @@ def publish_vault_dir(
             assert pf.commentary is not None
             commentary = pf.commentary
             if commentary.published_at is None:
-                commentary = commentary.model_copy(
-                    update={"published_at": now}
-                )
+                commentary = commentary.model_copy(update={"published_at": now})
             doc.set(commentary.model_dump(mode="json"))
         else:
             # unpublish and delete both pull the doc from serving.
@@ -145,9 +152,7 @@ def main() -> int:
     )
 
     try:
-        result = publish_vault_dir(
-            vault_dir, project=project, dry_run=args.dry_run
-        )
+        result = publish_vault_dir(vault_dir, project=project, dry_run=args.dry_run)
     except Exception as exc:
         # CLI boundary: a parse/validation/rank-collision failure
         # should print one clean line and exit 1, not dump a traceback.

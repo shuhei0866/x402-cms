@@ -21,7 +21,7 @@ x402 ecosystem の動向（merged / active / 新規 PR、活発な issue 議論�
 
 - **This week at a glance** — ファーストビューのダッシュボード。誰が動いたか（author 別の活動集約、bot は脚注に分離）、何が注目されているか（PR と issue を comments 数で単一ランキング）、どの領域で話されているか（topic / cluster / keyword の分布）
 - **逆ピラミッドのセクション構成** — 進行中の議論を先頭に、議論が熱い順で読ませる。閉じられた新規 PR とリプライは `<details>` に畳む（畳むだけで、何も捨てない）
-- **ナビゲーション** — 安定 id 付きのセクション nav と前週・次週リンクで、巡回のループを閉じる
+- **ナビゲーション** — 公開済み記事のトップと一覧、安定 id 付きのsection nav、空weekを飛ばす前後リンクで巡回のループを閉じる
 
 並べ替えと折りたたみの規則はすべて機械的（リプライか否か、open か closed か、comments 数、時系列）に限定している。どの signal をどの topic に数えるかは curation ファイル（`config/topics.yaml`、gitignored。`config/topics.example.yaml` を動くテンプレートとして同梱）が持つ — **対応表そのものが編集行為であり、renderer は数えるだけ**。engagement 指標（likes）は意図的にソートに使わない。likes はフォロワー数の関数であり、signal を追う目的とずれるからである。
 
@@ -36,7 +36,7 @@ x402 ecosystem の動向（merged / active / 新規 PR、活発な issue 議論�
 
 ## ステータス
 
-Phase 0〜4 が **Base Sepolia testnet** 上で本番稼働している: 実 settlement 付きの dual render、weekly + daily の indexer 群（PR / issue / X posts）、curation 済み commentary パイプライン（vault → publish → Firestore）、情報設計済みの人間向け view。残る roadmap は Phase 5（Base mainnet 化と batch-settlement scheme への切り替え）である。
+Phase 0〜4 が **Base Sepolia testnet** 上で本番稼働している: 実 settlement 付きの dual render、weekly + daily の indexer 群（PR / issue / X posts）、curation 済み commentary パイプライン（vault → publish → Firestore）、情報設計済みの人間向け view。人間向けのトップ、記事一覧、空weekを飛ばすnavigationは、公開済みweek-level commentaryから生成する。残る roadmap は Phase 5（Base mainnet 化と batch-settlement scheme への切り替え）である。
 
 ## セットアップ
 
@@ -60,8 +60,12 @@ config の env 2 つを渡さなくても server は起動する。cluster 系�
 dual render を動作確認する:
 
 ```bash
-# 無料の root endpoint — 200 OK が返る
+# machine-readableなroot endpoint — 200 OK
 curl http://localhost:4021/
+
+# 人間向けトップと公開済み記事一覧 — 200 OK、HTML
+curl -A "Mozilla/5.0" http://localhost:4021/
+curl -A "Mozilla/5.0" http://localhost:4021/archive
 
 # 人間向け view — 200 OK、HTML が返る
 curl -A "Mozilla/5.0" http://localhost:4021/digest/2026-W27

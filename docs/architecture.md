@@ -11,8 +11,9 @@ Phases 0 through 4 are in production; Phase 5 (mainnet + the
 batch-settlement scheme) is the remaining roadmap item. Payments
 today run on **Base Sepolia testnet USDC** via `x402.org/facilitator`.
 The human view has been through an information-design pass: a
-first-view dashboard ("This week at a glance"), hottest-first section
-ordering, mechanical folds for bulk content, and page navigation.
+published-edition home and archive, calendar-first edition metadata,
+a first-view dashboard ("This week at a glance"), hottest-first section
+ordering, mechanical folds for bulk content, and gap-aware page navigation.
 
 ## 1. System overview
 

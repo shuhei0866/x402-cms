@@ -28,6 +28,51 @@ main {
   max-width: 60rem;
 }
 
+.sitehead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+.sitehead > a,
+.sitehead nav a {
+  text-decoration: none;
+}
+.eyebrow,
+.editionmeta,
+.edition span,
+.edition small {
+  color: var(--pico-muted-color);
+  font-family: var(--digest-mono);
+  font-size: 0.85rem;
+}
+.editionmeta {
+  margin: 0 0 1rem;
+}
+.editions {
+  list-style: none;
+  padding: 0;
+}
+.edition {
+  border-top: 1px solid var(--pico-muted-border-color);
+  padding: 0.8rem 0;
+}
+.edition:last-child {
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+.edition a,
+.edition strong,
+.edition span,
+.edition small {
+  display: block;
+}
+.edition a {
+  text-decoration: none;
+}
+
 /* --- masthead: title, week nav, snapshot, section nav -------------- */
 
 h1 {

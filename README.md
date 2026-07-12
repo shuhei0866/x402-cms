@@ -21,7 +21,7 @@ The human view is built for weekly review, not just display:
 
 - **This week at a glance** — a first-view dashboard: who moved (per-author activity roll-up, bots folded into a footnote), what's hot (PRs and issues in one comment-count ranking), where the talk is (topic / cluster / keyword distributions)
 - **Inverted-pyramid sections** — live discussions read first, most-discussed first; already-closed newcomers and reply tweets fold into `<details>` (folding hides, it never drops)
-- **Navigation** — a section nav with stable ids and adjacent-week links close the browse loop
+- **Navigation** — a published-edition home and archive, stable section ids, and previous/next links that skip unpublished week gaps
 
 Every ordering and folding rule is mechanical: reply-or-not, open-or-closed, comment counts, recency. Which signals count as which topic lives in a curated mapping (`config/topics.yaml`, gitignored; `config/topics.example.yaml` ships as a working template) — the mapping table is the editorial act, the renderer only counts. Engagement metrics (likes) are deliberately not a sort key: they track follower count, not signal.
 
@@ -36,7 +36,7 @@ Every ordering and folding rule is mechanical: reply-or-not, open-or-closed, com
 
 ## Status
 
-Phases 0–4 are in production on **Base Sepolia testnet**: dual render with real settlement, weekly + daily indexers (PRs / issues / X posts), the curated commentary pipeline (vault → publish → Firestore), and the information-designed human view. Phase 5 — Base mainnet and the batch-settlement scheme — is the remaining roadmap item.
+Phases 0–4 are in production on **Base Sepolia testnet**: dual render with real settlement, weekly + daily indexers (PRs / issues / X posts), the curated commentary pipeline (vault → publish → Firestore), and the information-designed human view. The human-first discovery layer derives its home, archive, and gap-aware navigation from published week-level commentary. Phase 5 — Base mainnet and the batch-settlement scheme — is the remaining roadmap item.
 
 ## Setup
 
@@ -60,8 +60,12 @@ Without the two config env vars the server still boots — the cluster sections 
 Verify the dual render:
 
 ```bash
-# Free landing endpoint — 200 OK
+# Machine-readable landing endpoint — 200 OK
 curl http://localhost:4021/
+
+# Human home and published archive — 200 OK, HTML
+curl -A "Mozilla/5.0" http://localhost:4021/
+curl -A "Mozilla/5.0" http://localhost:4021/archive
 
 # Human view — 200 OK, HTML
 curl -A "Mozilla/5.0" http://localhost:4021/digest/2026-W27
