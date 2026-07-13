@@ -32,6 +32,12 @@ data/cache.db
 build/
 *.log
 
+# Agent-friendliness benchmark artifacts (raw captures, transcripts,
+# private profiles, and unblinding keys). Public contracts live under
+# benchmarks/agent_friendliness/ outside these ignored paths.
+/benchmark_artifacts/
+/benchmarks/agent_friendliness/private/
+
 # Private — curator-specific judgement layer.
 # Public examples (*.example.md) are kept; everything else under prompts/ is private.
 config/tracked_handles.yaml

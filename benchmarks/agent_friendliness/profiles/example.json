@@ -1,0 +1,9 @@
+{
+  "version": "public-example-v1",
+  "interests": [
+    "x402 protocol reliability",
+    "agent-friendly structured data",
+    "Japanese builder activity"
+  ],
+  "note": "Public smoke-test profile only; never substitute it for an official run."
+}
