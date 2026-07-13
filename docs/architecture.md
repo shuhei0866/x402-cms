@@ -7,9 +7,11 @@ AI agents via HTTP 402 + the x402 protocol.
 
 [日本語版](architecture.ja.md)
 
-Phases 0 through 4 are in production; Phase 5 (mainnet + the
-batch-settlement scheme) is the remaining roadmap item. Payments
-today run on **Base Sepolia testnet USDC** via `x402.org/facilitator`.
+Phases 0 through 4 are in production. The
+[Agent-friendly Advantage Benchmark R0](agent-friendly-advantage-benchmark-r0.md)
+now gates Phase 5 (mainnet + the batch-settlement scheme) by measuring whether
+paid JSON actually reduces agent work compared with the free HTML route.
+Payments today run on **Base Sepolia testnet USDC** via `x402.org/facilitator`.
 The human view has been through an information-design pass: a
 published-edition home and archive, calendar-first edition metadata,
 a first-view dashboard ("This week at a glance"), hottest-first section

@@ -36,7 +36,7 @@ x402 ecosystem の動向（merged / active / 新規 PR、活発な issue 議論�
 
 ## ステータス
 
-Phase 0〜4 が **Base Sepolia testnet** 上で本番稼働している: 実 settlement 付きの dual render、weekly + daily の indexer 群（PR / issue / X posts）、curation 済み commentary パイプライン（vault → publish → Firestore）、情報設計済みの人間向け view。人間向けのトップ、記事一覧、空weekを飛ばすnavigationは、公開済みweek-level commentaryから生成する。残る roadmap は Phase 5（Base mainnet 化と batch-settlement scheme への切り替え）である。
+Phase 0〜4 が **Base Sepolia testnet** 上で本番稼働している: 実 settlement 付きの dual render、weekly + daily の indexer 群（PR / issue / X posts）、curation 済み commentary パイプライン（vault → publish → Firestore）、情報設計済みの人間向け view。人間向けのトップ、記事一覧、空weekを飛ばすnavigationは、公開済みweek-level commentaryから生成する。Phase 5の前に、[Agent-friendly Advantage Benchmark R0](docs/agent-friendly-advantage-benchmark-r0.ja.md)で、有料JSONが無料HTML経路より実際にエージェントの作業を減らすかを測る。Phase 5（Base mainnet化とbatch-settlement schemeへの切り替え）は、その証拠をgateとする。
 
 ## セットアップ
 

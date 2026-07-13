@@ -36,7 +36,7 @@ Every ordering and folding rule is mechanical: reply-or-not, open-or-closed, com
 
 ## Status
 
-Phases 0–4 are in production on **Base Sepolia testnet**: dual render with real settlement, weekly + daily indexers (PRs / issues / X posts), the curated commentary pipeline (vault → publish → Firestore), and the information-designed human view. The human-first discovery layer derives its home, archive, and gap-aware navigation from published week-level commentary. Phase 5 — Base mainnet and the batch-settlement scheme — is the remaining roadmap item.
+Phases 0–4 are in production on **Base Sepolia testnet**: dual render with real settlement, weekly + daily indexers (PRs / issues / X posts), the curated commentary pipeline (vault → publish → Firestore), and the information-designed human view. The human-first discovery layer derives its home, archive, and gap-aware navigation from published week-level commentary. Before Phase 5, the [Agent-friendly Advantage Benchmark R0](docs/agent-friendly-advantage-benchmark-r0.md) measures whether paid JSON actually reduces agent work compared with the free HTML route. Phase 5 — Base mainnet and the batch-settlement scheme — remains gated on that evidence.
 
 ## Setup
 

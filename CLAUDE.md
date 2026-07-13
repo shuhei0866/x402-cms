@@ -38,6 +38,7 @@ See [`docs/architecture.md`](docs/architecture.md). The core pattern: **same URL
 | 2 | X integration via xurl |
 | 3 | Japanese community section, peer cross-reference network |
 | 4 | Curator commentary layer (vault → publish → Firestore) |
+| 4.5 | Agent-friendly advantage benchmark (HTML vs paid JSON, before mainnet) |
 | 5 | Mainnet migration on Base, batch-settlement scheme |
 | 6 | Archive, search, SEO |
 
