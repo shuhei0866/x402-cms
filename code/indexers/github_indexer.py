@@ -56,8 +56,9 @@ from datetime import date, datetime, timedelta
 from typing import Literal
 
 import httpx
+from google.cloud import firestore
 
-from code.indexers.github_enrichment import enrich_prs, request_headers
+from code.indexers.github_enrichment import API_ROOT, enrich_prs, request_headers
 from code.schemas.pr import PRRecord, PRStatus
 from code.utils.dates import parse_iso_week, resolve_target_week, week_of
 from code.utils.firestore import build_client
@@ -66,6 +67,10 @@ DEFAULT_REPO = "x402-foundation/x402"
 COLLECTION = "source_data"
 SEARCH_URL = "https://api.github.com/search/issues"
 SEARCH_PAGE_SIZE = 100
+# The Search API serves at most 1,000 results (10 pages of 100) per
+# query. The `open` snapshot has no date window, so it is the kind that
+# actually approaches this ceiling.
+SEARCH_MAX_PAGES = 10
 DEFAULT_MIN_COMMENTS = 5
 
 Kind = Literal["merged", "active", "new", "open"]
@@ -131,30 +136,38 @@ def fetch_prs(
 
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=30.0)
+    items: list[dict] = []
+    total = 0
     try:
-        response = client.get(
-            SEARCH_URL,
-            params={"q": query, "per_page": SEARCH_PAGE_SIZE, "page": 1},
-            headers=headers,
-        )
-        response.raise_for_status()
-        data = response.json()
+        for page in range(1, SEARCH_MAX_PAGES + 1):
+            response = client.get(
+                SEARCH_URL,
+                params={"q": query, "per_page": SEARCH_PAGE_SIZE, "page": page},
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+            batch = data.get("items", [])
+            items.extend(batch)
+            total = data.get("total_count", total)
+            if len(batch) < SEARCH_PAGE_SIZE or len(items) >= total:
+                break
     finally:
         if owns_client:
             client.close()
 
-    total = data.get("total_count", 0)
-    if total > SEARCH_PAGE_SIZE:
+    if total > len(items):
         print(
-            f"WARNING: {total} '{kind}' PRs match the window but only the "
-            f"first {SEARCH_PAGE_SIZE} are indexed; bump pagination if "
-            f"weekly volume sustains this level.",
+            f"WARNING: {total} '{kind}' PRs match the window but only "
+            f"{len(items)} were indexed (the Search API serves at most "
+            f"{SEARCH_MAX_PAGES * SEARCH_PAGE_SIZE} per query); narrow the "
+            "window if this persists.",
             file=sys.stderr,
         )
 
     fallback_week = iso_week or f"{start.isocalendar().year:04d}-W{start.isocalendar().week:02d}"
     prs: list[PRRecord] = []
-    for item in data.get("items", []):
+    for item in items:
         pr_block = item.get("pull_request") or {}
         merged_at_str = pr_block.get("merged_at")
         merged_at = (
@@ -225,6 +238,74 @@ def write_to_firestore(prs: list[PRRecord], project: str | None = None) -> int:
     for pr in prs:
         collection.document(doc_id(pr)).set(pr.model_dump(mode="json"))
     return len(prs)
+
+
+def reconcile_stale_open_rows(
+    week: str,
+    repo: str,
+    fresh_open_numbers: set[int],
+    *,
+    project: str | None = None,
+    http_client: httpx.Client | None = None,
+) -> int:
+    """Re-check the week's open/draft rows that the fresh snapshot no longer returns.
+
+    The open snapshot only upserts what the Search API returns today, so a
+    PR that closed between runs would keep its stale open/draft row for the
+    week and leak into the stalled-PR view. Each suspect is re-checked
+    against the live PR endpoint (one request per suspect, usually zero
+    suspects) and its row updated to the precise terminal status; a PR the
+    live endpoint still reports open is left alone (Search lag).
+    """
+    collection = build_client(project=project).collection(COLLECTION)
+    week_docs = collection.where(filter=firestore.FieldFilter("week", "==", week)).stream()
+    suspects = []
+    for doc in week_docs:
+        data = doc.to_dict() or {}
+        if (
+            data.get("repo") == repo
+            and data.get("status") in ("open", "draft")
+            and data.get("pr_number") not in fresh_open_numbers
+        ):
+            suspects.append((doc, data))
+    if not suspects:
+        return 0
+
+    headers = request_headers()
+    owns_client = http_client is None
+    client = http_client or httpx.Client(timeout=30.0)
+    reconciled = 0
+    try:
+        for doc, data in suspects:
+            number = data["pr_number"]
+            try:
+                response = client.get(
+                    f"{API_ROOT}/repos/{repo}/pulls/{number}", headers=headers
+                )
+                response.raise_for_status()
+                live = response.json()
+            except httpx.HTTPError as exc:
+                print(
+                    f"WARNING: could not re-check PR #{number} ({exc}); "
+                    "leaving its row as-is.",
+                    file=sys.stderr,
+                )
+                continue
+            if live.get("state") != "closed":
+                continue
+            status = "merged" if live.get("merged_at") else "closed"
+            doc.reference.update(
+                {"status": status, "updated_at": live.get("updated_at")}
+            )
+            reconciled += 1
+            print(
+                f"Reconciled stale open row: PR #{number} -> {status}.",
+                file=sys.stderr,
+            )
+    finally:
+        if owns_client:
+            client.close()
+    return reconciled
 
 
 # Order matters for `--kind all`: write the broader kinds first so the
@@ -303,6 +384,7 @@ def main() -> int:
     kinds: tuple[Kind, ...] = ALL_KINDS if args.kind == "all" else (args.kind,)
     project = os.getenv("GOOGLE_CLOUD_PROJECT")
     grand_total = 0
+    open_numbers: set[int] | None = None
     # One cache across kinds: the open snapshot overlaps almost every
     # active/new row, so sharing it halves the enrichment requests.
     enrichment_cache: dict = {}
@@ -321,6 +403,8 @@ def main() -> int:
             iso_week=week,
         )
         print(f"Fetched {len(prs)} {kind} PR(s).", file=sys.stderr)
+        if kind == "open":
+            open_numbers = {pr.pr_number for pr in prs}
         if not args.no_enrich:
             prs = enrich_prs(prs, cache=enrichment_cache)
             print(
@@ -338,6 +422,16 @@ def main() -> int:
             file=sys.stderr,
         )
         grand_total += written
+
+    if open_numbers is not None and not args.dry_run:
+        reconciled = reconcile_stale_open_rows(
+            week, args.repo, open_numbers, project=project
+        )
+        if reconciled:
+            print(
+                f"Reconciled {reconciled} stale open row(s) for {week}.",
+                file=sys.stderr,
+            )
 
     if not args.dry_run and len(kinds) > 1:
         print(
