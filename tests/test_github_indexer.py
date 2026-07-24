@@ -19,6 +19,7 @@ from datetime import date
 import httpx
 
 from code.indexers.github_indexer import (
+    ALL_KINDS,
     _build_query,
     _status_for,
     doc_id,
@@ -88,6 +89,12 @@ class TestBuildQuery:
     def test_new_is_unmerged_created_in_window(self) -> None:
         q = _build_query(REPO, "new", START, END, 5)
         assert q == f"repo:{REPO} is:pr -is:merged created:2026-05-04..2026-05-10"
+
+    def test_open_snapshots_everything_currently_open_without_window(self) -> None:
+        # No date window: the stalled-PR view needs quiet PRs opened
+        # long before the week, which `active` / `new` never match.
+        q = _build_query(REPO, "open", START, END, 5)
+        assert q == f"repo:{REPO} is:pr is:open"
 
 
 class TestStatusFor:
@@ -179,10 +186,43 @@ class TestFetchPrs:
         assert prs[0].week == "2026-W19"
         assert prs[0].created_at is not None
 
+    def test_open_row_labelled_with_run_week_regardless_of_age(self) -> None:
+        # The open snapshot has no window; a PR opened months ago is
+        # bucketed into the week the run targets.
+        handler, captured = _responder(
+            [_item(7, state="open", created_at="2026-03-01T00:00:00Z")]
+        )
+        with _client(handler) as client:
+            prs = fetch_prs(
+                REPO, "open", START, END, iso_week="2026-W19", http_client=client
+            )
+        assert len(prs) == 1
+        assert prs[0].kind == "open"
+        assert prs[0].status == "open"
+        assert prs[0].week == "2026-W19"
+        assert captured["q"] == f"repo:{REPO} is:pr is:open"
+
+    def test_open_kind_keeps_draft_status(self) -> None:
+        handler, _ = _responder([_item(8, state="open", draft=True)])
+        with _client(handler) as client:
+            prs = fetch_prs(
+                REPO, "open", START, END, iso_week="2026-W19", http_client=client
+            )
+        assert prs[0].status == "draft"
+
     def test_empty_window_returns_empty(self) -> None:
         handler, _ = _responder([])
         with _client(handler) as client:
             assert fetch_prs(REPO, "new", START, END, http_client=client) == []
+
+
+class TestAllKindsOrder:
+    def test_open_runs_first_so_specific_kinds_win_doc_collisions(self) -> None:
+        # Kind is not in the doc id, so within one `--kind all` run the
+        # write order decides the surviving label: the broad open
+        # snapshot first, then active / new / merged relabel the rows
+        # they also match.
+        assert ALL_KINDS == ("open", "active", "new", "merged")
 
 
 class TestDocId:
