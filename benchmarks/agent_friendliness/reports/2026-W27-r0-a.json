@@ -1,0 +1,77 @@
+{
+  "schema_version": "r0-aggregate-report-v1",
+  "edition": "2026-W27",
+  "status": "awaiting_blind_evaluation",
+  "experiment": "A",
+  "source_snapshot_digest": "sha256:cddbf80d871946fc8e5731068f3bc15c4d4b850b84cdfc8a20bc6da7face0045",
+  "coverage": {
+    "merged_prs": 14,
+    "active_prs": 10,
+    "new_prs": 32,
+    "issues": 14,
+    "x_posts": 306,
+    "commentaries": 1
+  },
+  "controls": {
+    "model": "gpt-5.6-sol",
+    "effort": "xhigh",
+    "codex_cli_version": "codex-cli 0.144.1",
+    "prompt_version": "r0-task-v1",
+    "prompt_digest": "sha256:957b6ac811b0c293565779295ef13580588f8a2870ab3db150d249106452ceed",
+    "system_instructions_digest": "sha256:f8e76d78de38da2bc7008a2e2771a3437cd7bf5704db9c40ffdfa7d008936111",
+    "profile_version": "shuhei-x402-v1",
+    "profile_digest": "sha256:ff6f1445037bba6ed3a550cbf9e4c886d73930c95464f90b3d093df00d4c3ce2",
+    "tool_policy": "no-retrieval",
+    "randomization_seed": 20260713
+  },
+  "arms": {
+    "H": {
+      "status": "completed",
+      "representation_digest": "sha256:778ff0a1af2fe077727def83083f102a94b8c21264ec3c65c26838b011ffe390",
+      "runner_input_digest": "sha256:b356f383e89ad6f5a6e6aad860ef56fe4534e582e4aa9c1df0d6b389870c75c8",
+      "metrics": {
+        "representation_bytes": 159249,
+        "input_bytes": 161189,
+        "input_tokens": 61515,
+        "cached_input_tokens": 9984,
+        "output_tokens": 1066,
+        "reasoning_output_tokens": 497,
+        "wall_clock_ms": 48646,
+        "model_calls": 1,
+        "tool_calls": 0,
+        "response_schema_valid": true,
+        "exactly_three_items_valid": true,
+        "evidence_urls_present": true,
+        "duplicate_recommendation_count": 0
+      }
+    },
+    "J": {
+      "status": "completed",
+      "representation_digest": "sha256:f24780e4e4600aea98c8752fc1da0ea87613aa933838c3c0681ad452d44614c1",
+      "runner_input_digest": "sha256:5d737aa7194fe9cadb69b6bb3508081ae15aaf14bcbfd4fb1ae78788c543c871",
+      "metrics": {
+        "representation_bytes": 259524,
+        "input_bytes": 261464,
+        "input_tokens": 93900,
+        "cached_input_tokens": 9984,
+        "output_tokens": 1583,
+        "reasoning_output_tokens": 1018,
+        "wall_clock_ms": 67514,
+        "model_calls": 1,
+        "tool_calls": 0,
+        "response_schema_valid": true,
+        "exactly_three_items_valid": true,
+        "evidence_urls_present": true,
+        "duplicate_recommendation_count": 0
+      }
+    }
+  },
+  "blind_packet_digest": "sha256:cbd871ad2f095247981e45f8aad3adcb445240e3c4ceed24703e816a13ee0f29",
+  "blind_evaluation": null,
+  "artifact_policy": {
+    "raw_inputs_in_git": false,
+    "raw_transcripts_in_git": false,
+    "private_profile_in_git": false,
+    "unblinding_mapping_in_git": false
+  }
+}
