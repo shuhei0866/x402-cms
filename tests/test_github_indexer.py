@@ -15,14 +15,17 @@ discussion), and `new` (opened this week). What we lock in:
 from __future__ import annotations
 
 from datetime import date
+from unittest.mock import MagicMock
 
 import httpx
 
 from code.indexers.github_indexer import (
+    ALL_KINDS,
     _build_query,
     _status_for,
     doc_id,
     fetch_prs,
+    reconcile_stale_open_rows,
 )
 from code.schemas.pr import PRRecord
 
@@ -88,6 +91,12 @@ class TestBuildQuery:
     def test_new_is_unmerged_created_in_window(self) -> None:
         q = _build_query(REPO, "new", START, END, 5)
         assert q == f"repo:{REPO} is:pr -is:merged created:2026-05-04..2026-05-10"
+
+    def test_open_snapshots_everything_currently_open_without_window(self) -> None:
+        # No date window: the stalled-PR view needs quiet PRs opened
+        # long before the week, which `active` / `new` never match.
+        q = _build_query(REPO, "open", START, END, 5)
+        assert q == f"repo:{REPO} is:pr is:open"
 
 
 class TestStatusFor:
@@ -179,10 +188,43 @@ class TestFetchPrs:
         assert prs[0].week == "2026-W19"
         assert prs[0].created_at is not None
 
+    def test_open_row_labelled_with_run_week_regardless_of_age(self) -> None:
+        # The open snapshot has no window; a PR opened months ago is
+        # bucketed into the week the run targets.
+        handler, captured = _responder(
+            [_item(7, state="open", created_at="2026-03-01T00:00:00Z")]
+        )
+        with _client(handler) as client:
+            prs = fetch_prs(
+                REPO, "open", START, END, iso_week="2026-W19", http_client=client
+            )
+        assert len(prs) == 1
+        assert prs[0].kind == "open"
+        assert prs[0].status == "open"
+        assert prs[0].week == "2026-W19"
+        assert captured["q"] == f"repo:{REPO} is:pr is:open"
+
+    def test_open_kind_keeps_draft_status(self) -> None:
+        handler, _ = _responder([_item(8, state="open", draft=True)])
+        with _client(handler) as client:
+            prs = fetch_prs(
+                REPO, "open", START, END, iso_week="2026-W19", http_client=client
+            )
+        assert prs[0].status == "draft"
+
     def test_empty_window_returns_empty(self) -> None:
         handler, _ = _responder([])
         with _client(handler) as client:
             assert fetch_prs(REPO, "new", START, END, http_client=client) == []
+
+
+class TestAllKindsOrder:
+    def test_open_runs_first_so_specific_kinds_win_doc_collisions(self) -> None:
+        # Kind is not in the doc id, so within one `--kind all` run the
+        # write order decides the surviving label: the broad open
+        # snapshot first, then active / new / merged relabel the rows
+        # they also match.
+        assert ALL_KINDS == ("open", "active", "new", "merged")
 
 
 class TestDocId:
@@ -215,3 +257,92 @@ class TestDocId:
         assert doc_id(self._pr("2026-W22", number=9, kind="active")) == doc_id(
             self._pr("2026-W22", number=9, kind="merged")
         )
+
+
+class TestFetchPrsPagination:
+    """The open snapshot has no window, so it must page past 100 results."""
+
+    def test_fetches_all_pages_until_total(self) -> None:
+        pages: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            page = int(request.url.params["page"])
+            pages.append(page)
+            if page == 1:
+                items = [_item(n) for n in range(1, 101)]
+            else:
+                items = [_item(n) for n in range(101, 151)]
+            return httpx.Response(200, json={"total_count": 150, "items": items})
+
+        prs = fetch_prs(
+            REPO, "open", START, END, http_client=_client(handler), iso_week="2026-W19"
+        )
+        assert pages == [1, 2]
+        assert len(prs) == 150
+
+    def test_single_short_page_stops_after_one_request(self) -> None:
+        pages: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            pages.append(int(request.url.params["page"]))
+            return httpx.Response(
+                200, json={"total_count": 3, "items": [_item(n) for n in (1, 2, 3)]}
+            )
+
+        prs = fetch_prs(
+            REPO, "open", START, END, http_client=_client(handler), iso_week="2026-W19"
+        )
+        assert pages == [1]
+        assert len(prs) == 3
+
+
+class TestReconcileStaleOpenRows:
+    """Week rows left open/draft after the PR closed upstream get re-checked."""
+
+    def _doc(self, number: int, status: str) -> MagicMock:
+        doc = MagicMock()
+        doc.to_dict.return_value = {
+            "repo": REPO,
+            "pr_number": number,
+            "status": status,
+            "week": "2026-W19",
+        }
+        return doc
+
+    def test_closed_upstream_rows_are_reconciled(self, monkeypatch) -> None:
+        stale_closed = self._doc(11, "open")  # closed unmerged upstream
+        stale_merged = self._doc(12, "draft")  # merged upstream
+        search_lag = self._doc(13, "open")  # live endpoint still open: keep
+        fresh_open = self._doc(14, "open")  # in the fresh snapshot: not a suspect
+        merged_row = self._doc(15, "merged")  # terminal already: not a suspect
+
+        client_mock = MagicMock()
+        (
+            client_mock.collection.return_value.where.return_value.stream.return_value
+        ) = [stale_closed, stale_merged, search_lag, fresh_open, merged_row]
+        monkeypatch.setattr(
+            "code.indexers.github_indexer.build_client",
+            lambda project=None: client_mock,
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            number = int(request.url.path.rsplit("/", 1)[-1])
+            if number == 11:
+                body = {"state": "closed", "merged_at": None}
+            elif number == 12:
+                body = {"state": "closed", "merged_at": "2026-05-07T00:00:00Z"}
+            else:
+                body = {"state": "open", "merged_at": None}
+            body["updated_at"] = "2026-05-08T00:00:00Z"
+            return httpx.Response(200, json=body)
+
+        reconciled = reconcile_stale_open_rows(
+            "2026-W19", REPO, {14}, http_client=_client(handler)
+        )
+
+        assert reconciled == 2
+        assert stale_closed.reference.update.call_args[0][0]["status"] == "closed"
+        assert stale_merged.reference.update.call_args[0][0]["status"] == "merged"
+        search_lag.reference.update.assert_not_called()
+        fresh_open.reference.update.assert_not_called()
+        merged_row.reference.update.assert_not_called()

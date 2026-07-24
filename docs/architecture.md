@@ -38,7 +38,7 @@ graph TB
   end
 
   subgraph FS["Firestore (single read surface)"]
-    SrcCol["source_data<br/>(PRs: merged / active / new)"]
+    SrcCol["source_data<br/>(PRs: merged / active / new / open)"]
     IssueCol["issues<br/>(live discussions)"]
     XCol["x_posts<br/>(tweets)"]
     CommCol["commentary<br/>(Shuhei's notes)"]
@@ -177,7 +177,7 @@ flowchart LR
     direction TB
     Cron["Cloud Scheduler<br/>weekly Mon + daily<br/>09:00 JST"]
     Manual["/x402-reindex<br/>mid-week"]
-    GHJob["github_indexer Job<br/>(merged / active / new)"]
+    GHJob["github_indexer Job<br/>(merged / active / new / open)"]
     IssJob["issue_indexer Job"]
     XJob["x_indexer Job"]
     Cron --> GHJob
@@ -311,7 +311,10 @@ code/
 │   │                         resolve_target_week, week_of, shift_iso_week
 │   └── firestore.py          build_client (inject > project > ADC)
 ├── indexers/
-│   ├── github_indexer.py     multi-kind PR indexer (merged / active / new)
+│   ├── github_indexer.py     multi-kind PR indexer (merged / active /
+│   │                         new / open)
+│   ├── github_enrichment.py  per-PR touched paths + last maintainer
+│   │                         response
 │   ├── github_issue_indexer.py  active-issue indexer (issues collection)
 │   ├── x_text_parser.py      parse_pr_references
 │   └── x_indexer/            (5-file package)
@@ -334,7 +337,9 @@ code/
 │   ├── vault_parser.py       frontmatter + Commentary build
 │   └── publisher.py          scan + validate + tombstone + upsert
 ├── survey/
-│   └── surveyor.py           /x402-survey backend (Markdown out)
+│   ├── surveyor.py           /x402-survey backend (Markdown out)
+│   └── pr_field.py           cross-week PR views: stalled open PRs,
+│                             cross-SDK parity gaps
 ├── server/
 │   ├── main.py               FastAPI app + ServerConfig + handler
 │   └── static/               vendored pico.classless.min.css (MIT)
@@ -363,7 +368,7 @@ Three Claude Code skills live outside this repo, under
 | skill            | role                                                    |
 |------------------|---------------------------------------------------------|
 | `/x402-reindex`  | manual mid-week indexer trigger                         |
-| `/x402-survey`   | retrieve + cluster a week's data; no judgment           |
+| `/x402-survey`   | retrieve + cluster a week's data, plus the stalled-PR and cross-SDK parity views; no judgment |
 | `/x402-publish`  | vault → Firestore commentary, with rank-collision check |
 
 ## 6. Public / private separation

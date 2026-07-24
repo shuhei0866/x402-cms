@@ -1,6 +1,6 @@
 """GitHub indexer — fetch PRs from tracked x402 repositories.
 
-Three Search-API qualifiers cover the things we want to track this
+Four Search-API qualifiers cover the things we want to track this
 week:
 
 - `merged` — `is:pr is:merged merged:WEEK`. The original behaviour;
@@ -9,12 +9,20 @@ week:
   draft PRs that received discussion during the window.
 - `new` — `is:pr -is:merged created:WEEK`. PRs opened this week,
   regardless of whether discussion has started.
+- `open` — `is:pr is:open`, no date window. A snapshot of everything
+  currently open, labelled with the run's target week. This is what
+  the stalled-PR survey view reads: a quiet open PR matches neither
+  `active` (too few comments) nor `new` (opened weeks ago), so
+  without this kind it would silently fall out of the index. The
+  snapshot always describes the moment the indexer runs; an explicit
+  old `--week` merely labels the bucket.
 
 Run with:
 
     uv run python -m code.indexers.github_indexer --kind merged --week 2026-W19
     uv run python -m code.indexers.github_indexer --kind active --week 2026-W19
     uv run python -m code.indexers.github_indexer --kind new    --week 2026-W19
+    uv run python -m code.indexers.github_indexer --kind open   --week 2026-W19
     uv run python -m code.indexers.github_indexer --kind all    --week 2026-W19
 
 Idempotent: re-running for the same week overwrites existing
@@ -23,12 +31,19 @@ documents in place. The document ID is `{repo_safe}_{pr_number}_{week}`
 snapshotted per week rather than overwriting an earlier week's row. The
 kind is not in the key, so a PR that surfaces under multiple kinds in
 the same week converges on the row written last (the CLI orders `all`
-as active → new → merged, so a merged-this-week PR ends up labelled
+as open → active → new → merged, so the week-scoped kinds overwrite
+the broad open snapshot and a merged-this-week PR ends up labelled
 `kind=merged`).
+
+After each Search pass the rows are enriched with per-PR detail
+(`touched_paths`, `last_maintainer_activity_at` — see
+`code.indexers.github_enrichment`) unless `--no-enrich` is given.
 
 The Search API is called unauthenticated by default (10 req/min,
 ample for a weekly run). Set `GITHUB_TOKEN` or `GH_TOKEN` for the
 30 req/min authenticated quota and to lift the 1000-result cap.
+Enrichment adds 1-3 core-API requests per PR, which overflows the
+unauthenticated 60/hr core quota — real runs want a token.
 """
 
 from __future__ import annotations
@@ -41,7 +56,9 @@ from datetime import date, datetime, timedelta
 from typing import Literal
 
 import httpx
+from google.cloud import firestore
 
+from code.indexers.github_enrichment import API_ROOT, enrich_prs, request_headers
 from code.schemas.pr import PRRecord, PRStatus
 from code.utils.dates import parse_iso_week, resolve_target_week, week_of
 from code.utils.firestore import build_client
@@ -50,9 +67,13 @@ DEFAULT_REPO = "x402-foundation/x402"
 COLLECTION = "source_data"
 SEARCH_URL = "https://api.github.com/search/issues"
 SEARCH_PAGE_SIZE = 100
+# The Search API serves at most 1,000 results (10 pages of 100) per
+# query. The `open` snapshot has no date window, so it is the kind that
+# actually approaches this ceiling.
+SEARCH_MAX_PAGES = 10
 DEFAULT_MIN_COMMENTS = 5
 
-Kind = Literal["merged", "active", "new"]
+Kind = Literal["merged", "active", "new", "open"]
 
 
 def _build_query(repo: str, kind: Kind, start: date, end: date, min_comments: int) -> str:
@@ -66,6 +87,10 @@ def _build_query(repo: str, kind: Kind, start: date, end: date, min_comments: in
         return f"{base} -is:merged updated:{window} comments:>={min_comments}"
     if kind == "new":
         return f"{base} -is:merged created:{window}"
+    if kind == "open":
+        # No date window: this kind snapshots everything currently
+        # open, so the stalled-PR view sees quiet PRs opened long ago.
+        return f"{base} is:open"
     raise ValueError(f"unknown kind: {kind}")
 
 
@@ -101,45 +126,48 @@ def fetch_prs(
 
     The `iso_week` argument seeds the `week` field for `active` rows,
     whose `updated_at` already lives inside the window (so the label
-    matches the run); merged/new rows derive their label from the
-    timestamp the kind keys on (`merged_at` / `created_at`).
+    matches the run), and for `open` rows, which have no window at all
+    (the snapshot belongs to the week the run targets); merged/new rows
+    derive their label from the timestamp the kind keys on
+    (`merged_at` / `created_at`).
     """
     query = _build_query(repo, kind, start, end, min_comments)
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "x402-cms-indexer",
-    }
-    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = request_headers()
 
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=30.0)
+    items: list[dict] = []
+    total = 0
     try:
-        response = client.get(
-            SEARCH_URL,
-            params={"q": query, "per_page": SEARCH_PAGE_SIZE, "page": 1},
-            headers=headers,
-        )
-        response.raise_for_status()
-        data = response.json()
+        for page in range(1, SEARCH_MAX_PAGES + 1):
+            response = client.get(
+                SEARCH_URL,
+                params={"q": query, "per_page": SEARCH_PAGE_SIZE, "page": page},
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+            batch = data.get("items", [])
+            items.extend(batch)
+            total = data.get("total_count", total)
+            if len(batch) < SEARCH_PAGE_SIZE or len(items) >= total:
+                break
     finally:
         if owns_client:
             client.close()
 
-    total = data.get("total_count", 0)
-    if total > SEARCH_PAGE_SIZE:
+    if total > len(items):
         print(
-            f"WARNING: {total} '{kind}' PRs match the window but only the "
-            f"first {SEARCH_PAGE_SIZE} are indexed; bump pagination if "
-            f"weekly volume sustains this level.",
+            f"WARNING: {total} '{kind}' PRs match the window but only "
+            f"{len(items)} were indexed (the Search API serves at most "
+            f"{SEARCH_MAX_PAGES * SEARCH_PAGE_SIZE} per query); narrow the "
+            "window if this persists.",
             file=sys.stderr,
         )
 
     fallback_week = iso_week or f"{start.isocalendar().year:04d}-W{start.isocalendar().week:02d}"
     prs: list[PRRecord] = []
-    for item in data.get("items", []):
+    for item in items:
         pr_block = item.get("pull_request") or {}
         merged_at_str = pr_block.get("merged_at")
         merged_at = (
@@ -212,10 +240,80 @@ def write_to_firestore(prs: list[PRRecord], project: str | None = None) -> int:
     return len(prs)
 
 
-# Order matters for `--kind all`: write the lighter kinds first so a
-# PR that satisfies both (`active` early in the week then `merged` by
-# Friday) ends up labelled `merged`.
-ALL_KINDS: tuple[Kind, ...] = ("active", "new", "merged")
+def reconcile_stale_open_rows(
+    week: str,
+    repo: str,
+    fresh_open_numbers: set[int],
+    *,
+    project: str | None = None,
+    http_client: httpx.Client | None = None,
+) -> int:
+    """Re-check the week's open/draft rows that the fresh snapshot no longer returns.
+
+    The open snapshot only upserts what the Search API returns today, so a
+    PR that closed between runs would keep its stale open/draft row for the
+    week and leak into the stalled-PR view. Each suspect is re-checked
+    against the live PR endpoint (one request per suspect, usually zero
+    suspects) and its row updated to the precise terminal status; a PR the
+    live endpoint still reports open is left alone (Search lag).
+    """
+    collection = build_client(project=project).collection(COLLECTION)
+    week_docs = collection.where(filter=firestore.FieldFilter("week", "==", week)).stream()
+    suspects = []
+    for doc in week_docs:
+        data = doc.to_dict() or {}
+        if (
+            data.get("repo") == repo
+            and data.get("status") in ("open", "draft")
+            and data.get("pr_number") not in fresh_open_numbers
+        ):
+            suspects.append((doc, data))
+    if not suspects:
+        return 0
+
+    headers = request_headers()
+    owns_client = http_client is None
+    client = http_client or httpx.Client(timeout=30.0)
+    reconciled = 0
+    try:
+        for doc, data in suspects:
+            number = data["pr_number"]
+            try:
+                response = client.get(
+                    f"{API_ROOT}/repos/{repo}/pulls/{number}", headers=headers
+                )
+                response.raise_for_status()
+                live = response.json()
+            except httpx.HTTPError as exc:
+                print(
+                    f"WARNING: could not re-check PR #{number} ({exc}); "
+                    "leaving its row as-is.",
+                    file=sys.stderr,
+                )
+                continue
+            if live.get("state") != "closed":
+                continue
+            status = "merged" if live.get("merged_at") else "closed"
+            doc.reference.update(
+                {"status": status, "updated_at": live.get("updated_at")}
+            )
+            reconciled += 1
+            print(
+                f"Reconciled stale open row: PR #{number} -> {status}.",
+                file=sys.stderr,
+            )
+    finally:
+        if owns_client:
+            client.close()
+    return reconciled
+
+
+# Order matters for `--kind all`: write the broader kinds first so the
+# most specific label wins the doc-id collision. `open` snapshots every
+# open PR and goes first; a PR with live discussion is then relabelled
+# `active`, a fresh one `new`, and a PR that satisfies several (`active`
+# early in the week then `merged` by Friday) ends up labelled `merged`.
+ALL_KINDS: tuple[Kind, ...] = ("open", "active", "new", "merged")
 
 
 def main() -> int:
@@ -246,12 +344,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--kind",
-        choices=("merged", "active", "new", "all"),
+        choices=("merged", "active", "new", "open", "all"),
         default="merged",
         help=(
-            "Which Search qualifier to run. 'all' runs active → new → "
-            "merged in sequence so the merged kind wins when a PR "
-            "qualifies for multiple."
+            "Which Search qualifier to run. 'all' runs open → active → "
+            "new → merged in sequence so the most specific kind wins "
+            "when a PR qualifies for multiple."
         ),
     )
     parser.add_argument(
@@ -261,6 +359,15 @@ def main() -> int:
         help=(
             "Comment-count floor for kind=active (default: "
             f"{DEFAULT_MIN_COMMENTS}). Ignored by other kinds."
+        ),
+    )
+    parser.add_argument(
+        "--no-enrich",
+        action="store_true",
+        help=(
+            "Skip the per-PR enrichment pass (touched paths + last "
+            "maintainer activity). Enrichment costs 1-3 core-API "
+            "requests per PR, so tokenless runs may want this."
         ),
     )
     parser.add_argument(
@@ -277,6 +384,10 @@ def main() -> int:
     kinds: tuple[Kind, ...] = ALL_KINDS if args.kind == "all" else (args.kind,)
     project = os.getenv("GOOGLE_CLOUD_PROJECT")
     grand_total = 0
+    open_numbers: set[int] | None = None
+    # One cache across kinds: the open snapshot overlaps almost every
+    # active/new row, so sharing it halves the enrichment requests.
+    enrichment_cache: dict = {}
     for kind in kinds:
         print(
             f"Fetching {kind} PRs from {args.repo} for {week} "
@@ -292,6 +403,15 @@ def main() -> int:
             iso_week=week,
         )
         print(f"Fetched {len(prs)} {kind} PR(s).", file=sys.stderr)
+        if kind == "open":
+            open_numbers = {pr.pr_number for pr in prs}
+        if not args.no_enrich:
+            prs = enrich_prs(prs, cache=enrichment_cache)
+            print(
+                f"Enriched {len(prs)} {kind} row(s) with paths"
+                " (+ maintainer activity for open rows).",
+                file=sys.stderr,
+            )
         if args.dry_run:
             print(json.dumps([pr.model_dump(mode="json") for pr in prs], indent=2, default=str))
             continue
@@ -302,6 +422,16 @@ def main() -> int:
             file=sys.stderr,
         )
         grand_total += written
+
+    if open_numbers is not None and not args.dry_run:
+        reconciled = reconcile_stale_open_rows(
+            week, args.repo, open_numbers, project=project
+        )
+        if reconciled:
+            print(
+                f"Reconciled {reconciled} stale open row(s) for {week}.",
+                file=sys.stderr,
+            )
 
     if not args.dry_run and len(kinds) > 1:
         print(

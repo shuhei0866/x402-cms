@@ -15,6 +15,15 @@
 #   - gcloud auth login + project set to my-utilities-490202
 #   - scripts/setup_sa.sh has been run (x402-cms-runner exists with
 #     roles/datastore.user; the indexer only needs Firestore write)
+#   - the GitHub token secret exists and the runner SA can read it.
+#     Enrichment (touched paths + maintainer activity, issue #17) calls
+#     the core REST API 1-3 times per PR; the unauthenticated quota
+#     (60/hr) dies on a normal weekly batch, so the token is required:
+#       printf '%s' "$GITHUB_TOKEN" | gcloud secrets create \
+#         x402-github-indexer-token --data-file=-
+#       gcloud secrets add-iam-policy-binding x402-github-indexer-token \
+#         --member "serviceAccount:x402-cms-runner@my-utilities-490202.iam.gserviceaccount.com" \
+#         --role roles/secretmanager.secretAccessor
 #
 # Usage:
 #   ./scripts/deploy_job.sh
@@ -36,9 +45,10 @@ gcloud run jobs deploy "$JOB" \
   --region "$REGION" \
   --service-account "$SA_EMAIL" \
   --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT}" \
+  --set-secrets "GITHUB_TOKEN=x402-github-indexer-token:latest" \
   --command python \
   --args="-m,code.indexers.github_indexer,--kind,all" \
   --max-retries 1 \
-  --task-timeout 300s \
+  --task-timeout 900s \
   --memory 512Mi \
   --cpu 1

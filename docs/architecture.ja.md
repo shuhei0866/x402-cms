@@ -37,7 +37,7 @@ graph TB
   end
 
   subgraph FS["Firestore (renderer の唯一の read 面)"]
-    SrcCol["source_data<br/>(PRs: merged / active / new)"]
+    SrcCol["source_data<br/>(PRs: merged / active / new / open)"]
     IssueCol["issues<br/>(活発な議論)"]
     XCol["x_posts<br/>(tweets)"]
     CommCol["commentary<br/>(Shuhei の解釈)"]
@@ -173,7 +173,7 @@ flowchart LR
     direction TB
     Cron["Cloud Scheduler<br/>週次・月 + 日次<br/>09:00 JST"]
     Manual["/x402-reindex<br/>週中"]
-    GHJob["github_indexer Job<br/>(merged / active / new)"]
+    GHJob["github_indexer Job<br/>(merged / active / new / open)"]
     IssJob["issue_indexer Job"]
     XJob["x_indexer Job"]
     Cron --> GHJob
@@ -304,7 +304,10 @@ code/
 │   │                         resolve_target_week, week_of, shift_iso_week
 │   └── firestore.py          build_client (inject > project > ADC)
 ├── indexers/
-│   ├── github_indexer.py     多種別 PR indexer (merged / active / new)
+│   ├── github_indexer.py     多種別 PR indexer (merged / active /
+│   │                         new / open)
+│   ├── github_enrichment.py  PR ごとの変更パスと maintainer 最終反応を
+│   │                         補完する
 │   ├── github_issue_indexer.py  活発 issue の indexer (issues collection)
 │   ├── x_text_parser.py      parse_pr_references
 │   └── x_indexer/            (5 ファイル package)
@@ -327,7 +330,9 @@ code/
 │   ├── vault_parser.py       frontmatter 解析 + Commentary 構築
 │   └── publisher.py          scan + validate + tombstone + upsert
 ├── survey/
-│   └── surveyor.py           /x402-survey のバックエンド (Markdown 出力)
+│   ├── surveyor.py           /x402-survey のバックエンド (Markdown 出力)
+│   └── pr_field.py           週横断の PR view: 停滞 open PR と
+│                             cross-SDK parity gap を列挙する
 ├── server/
 │   ├── main.py               FastAPI app + ServerConfig + handler
 │   └── static/               vendor した pico.classless.min.css (MIT)
@@ -355,7 +360,7 @@ Claude Code 用スキル 3 本は本リポジトリ外、`~/.claude/skills/` 配
 | skill            | 役割                                                    |
 |------------------|---------------------------------------------------------|
 | `/x402-reindex`  | indexer の週中手動再走                                  |
-| `/x402-survey`   | 週内データの retrieval + clustering、judgment は入れない |
+| `/x402-survey`   | 週内データの retrieval + clustering に加え、停滞 PR と cross-SDK parity の view を出す。judgment は入れない |
 | `/x402-publish`  | vault → Firestore commentary、rank 衝突を fail-fast      |
 
 ## 6. Public / Private の分離

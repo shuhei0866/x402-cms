@@ -10,11 +10,15 @@ find X, Y, Z under labelled sections".
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from code.renderers.digest import COLLECTION, COMMENTARY_COLLECTION, X_COLLECTION
 from code.survey.surveyor import survey_week
+
+# Fixed clock for the stalled-PR staleness computation: a Tuesday just
+# after the surveyed week 2026-W21 closed.
+NOW = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
 
 
 def _pr_dict(
@@ -54,6 +58,48 @@ def _post_dict(
     }
 
 
+def _pr_record_dict(
+    number: int,
+    *,
+    title: str,
+    status: str = "open",
+    kind: str = "open",
+    week: str = "2026-W21",
+    author: str = "extdev",
+    touched_paths: list[str] | None = None,
+    merged_at: datetime | None = None,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
+    last_maintainer_activity_at: datetime | None = None,
+    enriched_at: datetime | None = None,
+    labels: list[str] | None = None,
+) -> dict:
+    """A full multi-kind row, as the extended indexer writes it."""
+    data = {
+        "repo": "x402-foundation/x402",
+        "pr_number": number,
+        "title": title,
+        "author": author,
+        "url": f"https://github.com/x402-foundation/x402/pull/{number}",
+        "week": week,
+        "status": status,
+        "kind": kind,
+        "comments": 0,
+        "labels": labels or [],
+        "touched_paths": touched_paths or [],
+    }
+    for field, value in (
+        ("merged_at", merged_at),
+        ("created_at", created_at),
+        ("updated_at", updated_at),
+        ("last_maintainer_activity_at", last_maintainer_activity_at),
+        ("enriched_at", enriched_at),
+    ):
+        if value is not None:
+            data[field] = value.isoformat()
+    return data
+
+
 def _commentary_dict(slug: str, target_refs: list[str]) -> dict:
     return {
         "slug": slug,
@@ -83,9 +129,15 @@ def _client(
     prs: list[dict] | None = None,
     posts: list[dict] | None = None,
     commentaries: list[dict] | None = None,
+    pr_corpus: list[dict] | None = None,
 ) -> MagicMock:
+    """Mock Firestore. `prs` feeds the week-filtered read; `pr_corpus`
+    feeds the unfiltered cross-week stream the field views use
+    (defaulting to `prs` so single-week tests stay one-liner)."""
     pr_coll = MagicMock()
     pr_coll.where.return_value.stream.return_value = iter(_docs(prs or []))
+    corpus = pr_corpus if pr_corpus is not None else (prs or [])
+    pr_coll.stream.side_effect = lambda: iter(_docs(corpus))
     x_coll = MagicMock()
     x_coll.where.return_value.stream.return_value = iter(_docs(posts or []))
     c_coll = MagicMock()
@@ -181,6 +233,174 @@ class TestCrossReferencesDrawn:
         assert "DukeOphir" in section
 
 
+class TestStalledOpenPRsSection:
+    def test_lists_maintainer_silent_open_prs_longest_first(self) -> None:
+        corpus = [
+            _pr_record_dict(
+                300,
+                title="feat: add go facilitator",
+                last_maintainer_activity_at=NOW - timedelta(days=12),
+                created_at=NOW - timedelta(days=30),
+                enriched_at=NOW - timedelta(days=1),
+            ),
+            _pr_record_dict(
+                301,
+                title="feat: tweak retry docs",
+                last_maintainer_activity_at=NOW - timedelta(days=2),
+                created_at=NOW - timedelta(days=9),
+                enriched_at=NOW - timedelta(days=1),
+            ),
+            _pr_record_dict(
+                302,
+                title="fix: never reviewed",
+                created_at=NOW - timedelta(days=20),
+                enriched_at=NOW - timedelta(days=1),
+            ),
+            _pr_record_dict(
+                303,
+                title="wip: draft thing",
+                status="draft",
+                created_at=NOW - timedelta(days=40),
+                enriched_at=NOW - timedelta(days=1),
+            ),
+        ]
+        md = survey_week("2026-W21", client=_client(pr_corpus=corpus), now=NOW)
+        assert "## Stalled open PRs" in md
+        section = md.split("## Stalled open PRs")[1].split("\n## ")[0]
+        # never-responded (20d) sorts above responded-then-silent (12d)
+        assert "#302" in section and "no maintainer response since opening (20d)" in section
+        assert "#300" in section and "maintainer last responded 12d ago" in section
+        assert section.index("#302") < section.index("#300")
+        # fresh response and draft rows stay out
+        assert "#301" not in section
+        assert "#303" not in section
+
+    def test_open_rows_from_other_weeks_do_not_leak_in(self) -> None:
+        corpus = [
+            _pr_record_dict(
+                310,
+                title="fix: stalled but last week",
+                week="2026-W20",
+                created_at=NOW - timedelta(days=30),
+                enriched_at=NOW - timedelta(days=8),
+            ),
+        ]
+        md = survey_week("2026-W21", client=_client(pr_corpus=corpus), now=NOW)
+        section = md.split("## Stalled open PRs")[1].split("\n## ")[0]
+        assert "#310" not in section
+        assert "No open-PR snapshot rows" in section
+
+    def test_missing_open_snapshot_is_called_out(self) -> None:
+        # A merged-only corpus means the open kind never ran for the
+        # week — say so instead of showing a falsely clean list.
+        md = survey_week(
+            "2026-W21",
+            client=_client(prs=[_pr_dict(1)]),
+            now=NOW,
+        )
+        section = md.split("## Stalled open PRs")[1].split("\n## ")[0]
+        assert "No open-PR snapshot rows" in section
+
+    def test_all_open_prs_fresh_reports_clean_state(self) -> None:
+        corpus = [
+            _pr_record_dict(
+                320,
+                title="feat: active thing",
+                last_maintainer_activity_at=NOW - timedelta(days=1),
+                created_at=NOW - timedelta(days=3),
+                enriched_at=NOW,
+            ),
+        ]
+        md = survey_week("2026-W21", client=_client(pr_corpus=corpus), now=NOW)
+        section = md.split("## Stalled open PRs")[1].split("\n## ")[0]
+        assert "All 1 open PRs heard from a maintainer" in section
+
+
+class TestCrossSDKParityGapsSection:
+    def test_single_sdk_fix_without_counterpart_is_listed(self) -> None:
+        corpus = [
+            _pr_record_dict(
+                400,
+                title="fix: reject zero-amount voucher",
+                status="merged",
+                kind="merged",
+                week="2026-W20",
+                touched_paths=["python/x402/verify.py"],
+                merged_at=NOW - timedelta(days=10),
+            ),
+            _pr_record_dict(
+                401,
+                title="feat: new dashboard",
+                status="merged",
+                kind="merged",
+                week="2026-W20",
+                touched_paths=["typescript/site/app.ts"],
+                merged_at=NOW - timedelta(days=10),
+            ),
+        ]
+        md = survey_week("2026-W21", client=_client(pr_corpus=corpus), now=NOW)
+        assert "## Cross-SDK parity gaps" in md
+        section = md.split("## Cross-SDK parity gaps")[1].split("\n## ")[0]
+        assert "[python-only]" in section
+        assert "#400" in section
+        assert "no counterpart in go, typescript" in section
+        # the non-fix stays out of the gap list
+        assert "#401" not in section
+
+    def test_counterpart_in_one_sdk_narrows_missing_to_the_other(self) -> None:
+        corpus = [
+            _pr_record_dict(
+                400,
+                title="fix: reject zero-amount voucher",
+                status="merged",
+                kind="merged",
+                week="2026-W20",
+                touched_paths=["python/x402/verify.py"],
+                merged_at=NOW - timedelta(days=10),
+            ),
+            # an open port in flight still covers the gap for
+            # candidate-picking purposes
+            _pr_record_dict(
+                402,
+                title="fix(ts): reject zero-amount voucher",
+                touched_paths=["typescript/packages/x402/src/verify.ts"],
+                created_at=NOW - timedelta(days=2),
+                enriched_at=NOW,
+            ),
+        ]
+        md = survey_week("2026-W21", client=_client(pr_corpus=corpus), now=NOW)
+        section = md.split("## Cross-SDK parity gaps")[1].split("\n## ")[0]
+        assert "#400" in section
+        assert "no counterpart in go" in section
+        assert "typescript" not in section.split("no counterpart in go")[1].split("\n")[0]
+
+    def test_cross_week_dedupe_reads_latest_snapshot_state(self) -> None:
+        # W20 saw the PR open; W21 saw it merged. The parity view must
+        # treat it as merged (candidate), not skip it as open.
+        corpus = [
+            _pr_record_dict(
+                410,
+                title="fix: nonce reuse in settle",
+                week="2026-W20",
+                touched_paths=["go/pkg/x402/settle.go"],
+                created_at=NOW - timedelta(days=30),
+            ),
+            _pr_record_dict(
+                410,
+                title="fix: nonce reuse in settle",
+                status="merged",
+                kind="merged",
+                week="2026-W21",
+                touched_paths=["go/pkg/x402/settle.go"],
+                merged_at=NOW - timedelta(days=2),
+            ),
+        ]
+        md = survey_week("2026-W21", client=_client(pr_corpus=corpus), now=NOW)
+        section = md.split("## Cross-SDK parity gaps")[1].split("\n## ")[0]
+        assert "[go-only]" in section
+        assert "#410" in section
+
+
 class TestActivePRAuthors:
     def test_groups_prs_by_author_with_counts_descending(self) -> None:
         md = survey_week(
@@ -236,6 +456,8 @@ class TestEmptyWeek:
             "## Snapshot",
             "## PRs without commentary yet",
             "## Cross-references already drawn",
+            "## Stalled open PRs",
+            "## Cross-SDK parity gaps",
             "## Active PR authors",
             "## X cluster activity",
         ):
