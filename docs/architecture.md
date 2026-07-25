@@ -12,6 +12,10 @@ Phases 0 through 4 are in production. The
 now gates Phase 5 (mainnet + the batch-settlement scheme) by measuring whether
 paid JSON actually reduces agent work compared with the free HTML route.
 Payments today run on **Base Sepolia testnet USDC** via `x402.org/facilitator`.
+R1 treats the two views as semantically consistent but functionally
+non-isomorphic: HTML supports human cognition and prioritisation, while the
+future paid packet supports delegated investigation and execution. See the
+[design memo](agent-friendly-non-isomorphism-memo.md).
 The human view has been through an information-design pass: a
 published-edition home and archive, calendar-first edition metadata,
 a first-view dashboard ("This week at a glance"), hottest-first section

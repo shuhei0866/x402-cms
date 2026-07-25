@@ -292,9 +292,12 @@ entitlements, and feedback infrastructure. R0 introduces no dependency on it.
 
 ### R1 — agent decision packet
 
-R1 is intentionally unspecified until R0 evidence exists. The current leading
-hypothesis is a delta-first packet with stable identifiers, source coverage,
-evidence links, entity relations, and explicit uncertainty.
+The W27 blind review and external-grounding follow-up now give R1 a design
+direction while leaving its production schema unapproved. R0 remains the
+baseline for the current isomorphic projections. R1 will test a functionally
+non-isomorphic, delegation-ready work packet with claims, evidence,
+counterevidence, bounded actions, verification, and expected receipts. See
+[Semantic Consistency, Functional Non-Isomorphism](agent-friendly-non-isomorphism-memo.md).
 
 ## 15. R0 acceptance criteria
 

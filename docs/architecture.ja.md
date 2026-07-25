@@ -10,6 +10,9 @@ Phase 0〜4 が本番稼働中。[Agent-friendly Advantage Benchmark R0](agent-f
 で、有料JSONが無料HTML経路より実際にエージェントの作業を減らすかを測り、
 Phase 5 (mainnet化 + batch-settlement schemeへの切替) のgateとする。現状の
 決済は **Base Sepolia testnetのUSDC** を `x402.org/facilitator` 経由で扱う。
+R1では両viewを、意味的には一貫しつつ機能的には非同型として扱う。HTMLは人間の
+認知と優先順位づけを支え、将来の有料packetは委任された探索と実行を支える。詳細は
+[設計メモ](agent-friendly-non-isomorphism-memo.ja.md)を参照。
 人間向け view は情報設計を
 一巡済み: 公開済み記事のトップと一覧、日付中心のedition metadata、
 ファーストビューのダッシュボード (This week at a glance)、議論が熱い順の

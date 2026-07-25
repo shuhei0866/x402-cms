@@ -269,8 +269,11 @@ R0では依存を追加しない。
 
 ### R1 — Agent decision packet
 
-R1の詳細はR0の証拠が出るまで決めない。現時点の有力仮説は、stable ID、source coverage、
-evidence link、entity relation、不確実性を持つdelta-first packetである。
+W27のblind reviewとexternal-groundingから、本番schemaを未承認のままR1の設計方向を
+定められる証拠が得られた。R0は現在の同型性が高いprojectionのbaselineとして維持する。
+R1では、claim、evidence、counterevidence、bounded action、verification、expected receiptを
+持つ、機能的に非同型でdelegation-readyなwork packetを検証する。詳細は
+[意味的一貫性と機能的非同型性](agent-friendly-non-isomorphism-memo.ja.md)を参照。
 
 ## 15. R0受け入れ条件
 
