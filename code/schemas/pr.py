@@ -20,7 +20,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 PRStatus = Literal["merged", "open", "draft", "closed"]
-PRKind = Literal["merged", "active", "new"]
+PRKind = Literal["merged", "active", "new", "open"]
 
 
 class PRRecord(BaseModel):
@@ -30,6 +30,18 @@ class PRRecord(BaseModel):
     derived from `{repo_safe}_{pr_number}`, so multiple indexer kinds
     converging on the same PR upsert the same row. The `kind` field
     records which Search query surfaced the row most recently.
+
+    The last three fields come from the per-PR enrichment pass
+    (`code.indexers.github_enrichment`), not from the Search API:
+
+    - `touched_paths` — file paths the PR changes; the parity view
+      classifies rows into SDK directories from these.
+    - `last_maintainer_activity_at` — when a maintainer (OWNER /
+      MEMBER / COLLABORATOR, not the PR author, not a bot) last
+      commented or reviewed. Only populated for open/draft rows.
+    - `enriched_at` — when the enrichment pass ran. Distinguishes "no
+      maintainer has ever responded" (None + `enriched_at` set) from
+      "the indexer never checked" (both None).
     """
 
     repo: str
@@ -45,6 +57,9 @@ class PRRecord(BaseModel):
     created_at: datetime | None = None
     comments: int = 0
     labels: list[str] = Field(default_factory=list)
+    touched_paths: list[str] = Field(default_factory=list)
+    last_maintainer_activity_at: datetime | None = None
+    enriched_at: datetime | None = None
 
 
 class MergedPR(BaseModel):
