@@ -26,9 +26,20 @@ the same week converges on the row written last (the CLI orders `all`
 as active → new → merged, so a merged-this-week PR ends up labelled
 `kind=merged`).
 
+After the search, an enrichment pass fills the two fields the Search
+API does not carry but the survey's scouting views need: the paths a
+PR touches (cross-SDK parity gap) and the last maintainer reaction on
+it (stalled-PR list). It costs one REST call per PR for the files, plus
+two more for each PR that is not merged yet. Pass `--no-enrich` to skip
+it. Enrichment is best-effort: if GitHub starts refusing calls, the
+remaining PRs keep their empty defaults and the run still writes.
+
 The Search API is called unauthenticated by default (10 req/min,
 ample for a weekly run). Set `GITHUB_TOKEN` or `GH_TOKEN` for the
-30 req/min authenticated quota and to lift the 1000-result cap.
+30 req/min authenticated quota and to lift the 1000-result cap. The
+enrichment pass draws on the ordinary REST quota instead — 60 req/hour
+unauthenticated, which a busy week exhausts, so a token matters more
+once enrichment is on.
 """
 
 from __future__ import annotations
@@ -52,7 +63,53 @@ SEARCH_URL = "https://api.github.com/search/issues"
 SEARCH_PAGE_SIZE = 100
 DEFAULT_MIN_COMMENTS = 5
 
+FILES_URL = "https://api.github.com/repos/{repo}/pulls/{number}/files"
+COMMENTS_URL = "https://api.github.com/repos/{repo}/issues/{number}/comments"
+REVIEWS_URL = "https://api.github.com/repos/{repo}/pulls/{number}/reviews"
+REST_PAGE_SIZE = 100
+REST_MAX_PAGES = 3
+
+MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+"""GitHub's own answer to "does this person speak for the project?".
+
+Every comment and review carries an `author_association`. `OWNER`,
+`MEMBER` and `COLLABORATOR` all mean org membership or write access on
+the repo; `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR` and `NONE` do not. So
+the indexer never needs a hand-maintained maintainer roster, and never
+has to guess — which keeps the whole path mechanical.
+"""
+
 Kind = Literal["merged", "active", "new"]
+
+
+class EnrichmentRefused(RuntimeError):
+    """GitHub declined an enrichment call (rate limit, or repo gone).
+
+    Raised so `enrich_prs` can stop the remaining per-PR calls in one
+    place rather than hammering an endpoint that is already saying no.
+    The rows keep their empty defaults; the survey views report how many
+    rows lack indexed data instead of pretending the gap is real.
+    """
+
+
+def _api_headers() -> dict[str, str]:
+    """Common headers for both the Search and the REST calls."""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "x402-cms-indexer",
+    }
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    """Parse a GitHub timestamp (`...Z`) into an aware `datetime`."""
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _build_query(repo: str, kind: Kind, start: date, end: date, min_comments: int) -> str:
@@ -105,14 +162,7 @@ def fetch_prs(
     timestamp the kind keys on (`merged_at` / `created_at`).
     """
     query = _build_query(repo, kind, start, end, min_comments)
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "x402-cms-indexer",
-    }
-    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    headers = _api_headers()
 
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=30.0)
@@ -141,24 +191,9 @@ def fetch_prs(
     prs: list[PRRecord] = []
     for item in data.get("items", []):
         pr_block = item.get("pull_request") or {}
-        merged_at_str = pr_block.get("merged_at")
-        merged_at = (
-            datetime.fromisoformat(merged_at_str.replace("Z", "+00:00"))
-            if merged_at_str
-            else None
-        )
-        created_at_str = item.get("created_at")
-        created_at = (
-            datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-            if created_at_str
-            else None
-        )
-        updated_at_str = item.get("updated_at")
-        updated_at = (
-            datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
-            if updated_at_str
-            else None
-        )
+        merged_at = _parse_ts(pr_block.get("merged_at"))
+        created_at = _parse_ts(item.get("created_at"))
+        updated_at = _parse_ts(item.get("updated_at"))
 
         if kind == "merged":
             if not merged_at:
@@ -187,6 +222,171 @@ def fetch_prs(
             )
         )
     return prs
+
+
+def _get_pages(
+    client: httpx.Client,
+    url: str,
+    headers: dict[str, str],
+    *,
+    max_pages: int = REST_MAX_PAGES,
+) -> tuple[list[dict], bool]:
+    """Read up to `max_pages` pages of a REST list endpoint.
+
+    Returns the rows and whether the cap was hit — a full final page
+    means "there may be more", so the flag over-reports rather than
+    letting a caller mistake a prefix for the whole list.
+    """
+    rows: list[dict] = []
+    for page in range(1, max_pages + 1):
+        response = client.get(
+            url,
+            params={"per_page": REST_PAGE_SIZE, "page": page},
+            headers=headers,
+        )
+        if response.status_code >= 400:
+            raise EnrichmentRefused(f"{url} returned HTTP {response.status_code}")
+        batch = response.json()
+        if not isinstance(batch, list):
+            raise EnrichmentRefused(f"{url} returned a non-list body")
+        rows.extend(batch)
+        if len(batch) < REST_PAGE_SIZE:
+            return rows, False
+    return rows, True
+
+
+def fetch_changed_paths(
+    repo: str,
+    number: int,
+    *,
+    http_client: httpx.Client,
+    headers: dict[str, str] | None = None,
+) -> tuple[list[str], bool]:
+    """Return the file paths a PR touches, and whether the list is cut off.
+
+    Only the post-rename path is kept: the parity view asks "which SDK
+    directory does this change live in", and for a renamed file that is
+    where it landed, not where it came from.
+    """
+    rows, truncated = _get_pages(
+        http_client, FILES_URL.format(repo=repo, number=number), headers or _api_headers()
+    )
+    return [row["filename"] for row in rows if row.get("filename")], truncated
+
+
+def _is_maintainer_event(event: dict, pr_author: str) -> bool:
+    """Is this comment/review a reaction *from the project* to the PR?
+
+    Three exclusions, all mechanical. The PR's own author is dropped
+    even when they are a maintainer — a maintainer replying under their
+    own PR is not the project answering a contributor, and counting it
+    would hide exactly the PRs nobody has looked at. Bots are dropped
+    because a CI status comment is not a human deciding anything.
+    Everyone else is judged by `author_association`.
+    """
+    user = event.get("user") or {}
+    login = user.get("login") or ""
+    if not login or login == pr_author:
+        return False
+    if user.get("type") == "Bot" or login.endswith("[bot]"):
+        return False
+    return (event.get("author_association") or "").upper() in MAINTAINER_ASSOCIATIONS
+
+
+def fetch_maintainer_activity(
+    repo: str,
+    number: int,
+    pr_author: str,
+    *,
+    http_client: httpx.Client,
+    headers: dict[str, str] | None = None,
+) -> tuple[datetime | None, list[str]]:
+    """Return the newest maintainer reaction on a PR, and who reacted.
+
+    Two endpoints cover what a maintainer can say on a PR in a way the
+    API stamps with an association: issue comments (the conversation
+    tab) and reviews (approve / request-changes / comment). `None` back
+    means no maintainer has said anything yet — which is the state the
+    stalled view most wants to surface, so it is a value, not an error.
+    """
+    headers = headers or _api_headers()
+    reactions: list[tuple[datetime, str]] = []
+
+    comments, _ = _get_pages(
+        http_client, COMMENTS_URL.format(repo=repo, number=number), headers
+    )
+    for comment in comments:
+        stamp = _parse_ts(comment.get("created_at"))
+        if stamp and _is_maintainer_event(comment, pr_author):
+            reactions.append((stamp, comment["user"]["login"]))
+
+    reviews, _ = _get_pages(
+        http_client, REVIEWS_URL.format(repo=repo, number=number), headers
+    )
+    for review in reviews:
+        # A review still being drafted has no `submitted_at`; it is not
+        # visible to the contributor either, so it is not a reaction.
+        stamp = _parse_ts(review.get("submitted_at"))
+        if stamp and _is_maintainer_event(review, pr_author):
+            reactions.append((stamp, review["user"]["login"]))
+
+    if not reactions:
+        return None, []
+    latest = max(stamp for stamp, _ in reactions)
+    return latest, sorted({login for _, login in reactions})
+
+
+def enrich_prs(
+    prs: list[PRRecord],
+    *,
+    http_client: httpx.Client | None = None,
+) -> int:
+    """Fill `changed_paths` / maintainer-activity fields in place.
+
+    Returns how many PRs were enriched. Every PR gets its file list (the
+    parity view compares merged fixes across SDKs too); only PRs that
+    have not merged get the two timeline calls, since a merged PR cannot
+    be stalled.
+
+    Best-effort by design: the first refusal from GitHub stops the pass
+    and leaves the rest at their defaults, because the weekly job losing
+    the whole search result to a rate limit would be a far worse trade
+    than an incomplete enrichment the survey can report as incomplete.
+    """
+    if not prs:
+        return 0
+
+    headers = _api_headers()
+    owns_client = http_client is None
+    client = http_client or httpx.Client(timeout=30.0)
+    enriched = 0
+    try:
+        for pr in prs:
+            try:
+                pr.changed_paths, pr.paths_truncated = fetch_changed_paths(
+                    pr.repo, pr.pr_number, http_client=client, headers=headers
+                )
+                if pr.status != "merged":
+                    (
+                        pr.last_maintainer_activity_at,
+                        pr.maintainer_responders,
+                    ) = fetch_maintainer_activity(
+                        pr.repo, pr.pr_number, pr.author, http_client=client, headers=headers
+                    )
+                enriched += 1
+            except (EnrichmentRefused, httpx.HTTPError) as exc:
+                print(
+                    f"WARNING: enrichment stopped at PR #{pr.pr_number} ({exc}). "
+                    f"{enriched}/{len(prs)} PR(s) carry paths and maintainer "
+                    "activity; the rest are written without them. Set "
+                    "GITHUB_TOKEN for the authenticated REST quota.",
+                    file=sys.stderr,
+                )
+                break
+    finally:
+        if owns_client:
+            client.close()
+    return enriched
 
 
 def doc_id(pr: PRRecord) -> str:
@@ -264,6 +464,16 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--no-enrich",
+        action="store_true",
+        help=(
+            "Skip the per-PR REST pass that fills changed file paths and "
+            "the last maintainer reaction. Saves one call per PR (three "
+            "for unmerged ones) at the cost of leaving the survey's "
+            "parity-gap and stalled-PR views without input."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Fetch and print results to stdout, but do not write to Firestore.",
@@ -292,6 +502,13 @@ def main() -> int:
             iso_week=week,
         )
         print(f"Fetched {len(prs)} {kind} PR(s).", file=sys.stderr)
+        if not args.no_enrich and prs:
+            enriched = enrich_prs(prs)
+            print(
+                f"Enriched {enriched}/{len(prs)} {kind} PR(s) with changed "
+                "paths and maintainer activity.",
+                file=sys.stderr,
+            )
         if args.dry_run:
             print(json.dumps([pr.model_dump(mode="json") for pr in prs], indent=2, default=str))
             continue

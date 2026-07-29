@@ -101,6 +101,43 @@ def read_prs_by_kind(
     return records
 
 
+def read_all_prs_for_week(
+    week: str,
+    project: str | None = None,
+    *,
+    client: firestore.Client | None = None,
+) -> list[PRRecord]:
+    """Load every indexed PR for a week, whatever its kind.
+
+    `read_week` narrows to merged rows and `read_prs_by_kind` to one
+    kind at a time; the survey's scouting views need the whole week in a
+    single typed list — the stalled view reads the unmerged rows, the
+    parity view compares merged fixes against unmerged ports. Documents
+    written before the multi-kind indexer carry neither `kind` nor
+    `status`, so both default to `merged`, the same backward-compatible
+    reading `read_week` applies. Sorted newest-first on whichever
+    timestamp the row carries, merged → updated → created.
+    """
+    fs = build_client(client, project)
+    docs = (
+        fs.collection(COLLECTION)
+        .where(filter=firestore.FieldFilter("week", "==", week))
+        .stream()
+    )
+    records: list[PRRecord] = []
+    for doc in docs:
+        data = dict(doc.to_dict() or {})
+        data.setdefault("kind", "merged")
+        data.setdefault("status", "merged")
+        records.append(PRRecord.model_validate(data))
+    _floor = datetime.min.replace(tzinfo=timezone.utc)
+    records.sort(
+        key=lambda r: r.merged_at or r.updated_at or r.created_at or _floor,
+        reverse=True,
+    )
+    return records
+
+
 def read_x_posts_for_week(
     week: str,
     project: str | None = None,

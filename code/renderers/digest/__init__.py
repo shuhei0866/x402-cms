@@ -33,6 +33,7 @@ from code.renderers.digest.readers import (
     DEFAULT_REPO,
     ISSUES_COLLECTION,
     X_COLLECTION,
+    read_all_prs_for_week,
     read_commentary_for_week,
     read_issues_for_week,
     read_prs_by_kind,
@@ -49,6 +50,7 @@ __all__ = [
     "JAPAN_CLUSTER",
     "X_COLLECTION",
     # readers
+    "read_all_prs_for_week",
     "read_commentary_for_week",
     "read_issues_for_week",
     "read_prs_by_kind",
