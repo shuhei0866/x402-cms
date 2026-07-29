@@ -4,6 +4,9 @@
 `read_week` but keeps only the rows the indexer labels `active` / `new`
 (those carry no `merged_at`, so they rehydrate as `PRRecord`). Active
 rows sort most-discussed first, new rows newest-first.
+`read_all_prs_for_week` reads the same collection with no kind filter
+at all — the survey's scouting views need merged fixes and unmerged
+ports side by side in one typed list.
 `read_issues_for_week` reads the separate `issues` collection,
 most-discussed first.
 
@@ -19,6 +22,7 @@ from unittest.mock import MagicMock
 from code.renderers.digest import (
     COLLECTION,
     ISSUES_COLLECTION,
+    read_all_prs_for_week,
     read_issues_for_week,
     read_prs_by_kind,
 )
@@ -140,6 +144,83 @@ class TestReadPrsByKind:
             ]
         )
         assert read_prs_by_kind("2026-W19", "active", client=client) == []
+
+
+class TestReadAllPrsForWeek:
+    def test_returns_every_kind_in_one_list(self) -> None:
+        client = _client_returning(
+            [
+                _pr(1, kind="active", updated_at=D1),
+                _pr(2, kind="new", created_at=D1),
+                {**_pr(3, kind="merged", status="merged"), "merged_at": D2.isoformat()},
+            ]
+        )
+        prs = read_all_prs_for_week("2026-W19", client=client)
+        assert all(isinstance(p, PRRecord) for p in prs)
+        assert {p.pr_number for p in prs} == {1, 2, 3}
+        client.collection.assert_called_once_with(COLLECTION)
+
+    def test_pre_multi_kind_rows_default_to_merged(self) -> None:
+        # Documents written before the indexer grew `kind` / `status`
+        # carry neither; `read_week` reads them as merged, so this
+        # reader has to agree or the same row would mean two things.
+        client = _client_returning(
+            [
+                {
+                    "repo": "x402-foundation/x402",
+                    "pr_number": 9,
+                    "title": "old row",
+                    "author": "a",
+                    "url": "u",
+                    "week": "2026-W19",
+                    "merged_at": D1.isoformat(),
+                }
+            ]
+        )
+        (pr,) = read_all_prs_for_week("2026-W19", client=client)
+        assert pr.kind == "merged"
+        assert pr.status == "merged"
+
+    def test_rows_without_enrichment_fields_still_load(self) -> None:
+        # The enrichment fields arrived after the first rows were
+        # written; a document lacking them must read as "unknown", not
+        # fail validation and take the whole week's survey with it.
+        client = _client_returning([_pr(1, kind="active", updated_at=D1)])
+        (pr,) = read_all_prs_for_week("2026-W19", client=client)
+        assert pr.changed_paths == []
+        assert pr.paths_truncated is False
+        assert pr.last_maintainer_activity_at is None
+        assert pr.maintainer_responders == []
+
+    def test_enrichment_fields_round_trip(self) -> None:
+        payload = {
+            **_pr(1, kind="active", updated_at=D1),
+            "changed_paths": ["python/x402/settle.py"],
+            "paths_truncated": True,
+            "last_maintainer_activity_at": D2.isoformat(),
+            "maintainer_responders": ["phdargen"],
+        }
+        (pr,) = read_all_prs_for_week("2026-W19", client=_client_returning([payload]))
+        assert pr.changed_paths == ["python/x402/settle.py"]
+        assert pr.paths_truncated is True
+        assert pr.last_maintainer_activity_at == D2
+        assert pr.maintainer_responders == ["phdargen"]
+
+    def test_sorted_newest_first_across_mixed_timestamps(self) -> None:
+        # Each kind dates itself differently, so the sort falls back
+        # merged → updated → created rather than assuming one field.
+        client = _client_returning(
+            [
+                _pr(1, kind="new", created_at=D1),
+                {**_pr(2, kind="merged", status="merged"), "merged_at": D3.isoformat()},
+                _pr(3, kind="active", updated_at=D2),
+            ]
+        )
+        prs = read_all_prs_for_week("2026-W19", client=client)
+        assert [p.pr_number for p in prs] == [2, 3, 1]
+
+    def test_empty_returns_empty(self) -> None:
+        assert read_all_prs_for_week("2026-W19", client=_client_returning([])) == []
 
 
 class TestReadIssuesForWeek:

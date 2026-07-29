@@ -10,11 +10,16 @@ discussion), and `new` (opened this week). What we lock in:
 - the row mapping, including the `week` label each kind keys on
   (`merged_at` for merged, `created_at` for new, the run's window for
   active) and the merged-kind drop of rows that never merged.
+
+The enrichment pass that follows the search has its own section: it
+fills the two fields the survey's scouting views read, and its rules
+about who counts as a maintainer and what happens when GitHub says no
+are the load-bearing part.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 import httpx
 
@@ -22,6 +27,9 @@ from code.indexers.github_indexer import (
     _build_query,
     _status_for,
     doc_id,
+    enrich_prs,
+    fetch_changed_paths,
+    fetch_maintainer_activity,
     fetch_prs,
 )
 from code.schemas.pr import PRRecord
@@ -183,6 +191,207 @@ class TestFetchPrs:
         handler, _ = _responder([])
         with _client(handler) as client:
             assert fetch_prs(REPO, "new", START, END, http_client=client) == []
+
+
+def _comment(
+    login: str,
+    association: str,
+    created_at: str,
+    *,
+    user_type: str = "User",
+) -> dict:
+    return {
+        "user": {"login": login, "type": user_type},
+        "author_association": association,
+        "created_at": created_at,
+    }
+
+
+def _review(
+    login: str,
+    association: str,
+    submitted_at: str | None,
+    *,
+    user_type: str = "User",
+) -> dict:
+    return {
+        "user": {"login": login, "type": user_type},
+        "author_association": association,
+        "submitted_at": submitted_at,
+    }
+
+
+def _rest_router(
+    *,
+    files: list[dict] | None = None,
+    comments: list[dict] | None = None,
+    reviews: list[dict] | None = None,
+    status: int = 200,
+):
+    """Route the three enrichment endpoints off one mock transport."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        seen.append(path)
+        if status != 200:
+            return httpx.Response(status, json={"message": "nope"})
+        if path.endswith("/files"):
+            body = files or []
+        elif path.endswith("/comments"):
+            body = comments or []
+        else:
+            body = reviews or []
+        return httpx.Response(200, json=body)
+
+    return handler, seen
+
+
+def _pr_record(number: int = 1, *, status: str = "open", author: str = "shuhei0866") -> PRRecord:
+    return PRRecord(
+        repo=REPO,
+        pr_number=number,
+        title=f"fix: thing {number}",
+        author=author,
+        url=f"https://github.com/{REPO}/pull/{number}",
+        week="2026-W19",
+        status=status,
+        kind="merged" if status == "merged" else "active",
+    )
+
+
+class TestFetchChangedPaths:
+    def test_returns_the_touched_paths(self) -> None:
+        handler, _ = _rest_router(
+            files=[{"filename": "python/x402/settle.py"}, {"filename": "README.md"}]
+        )
+        with _client(handler) as client:
+            paths, truncated = fetch_changed_paths(REPO, 42, http_client=client)
+        assert paths == ["python/x402/settle.py", "README.md"]
+        assert truncated is False
+
+    def test_a_short_page_means_the_list_is_complete(self) -> None:
+        handler, seen = _rest_router(files=[{"filename": "go/pkg/x.go"}])
+        with _client(handler) as client:
+            _, truncated = fetch_changed_paths(REPO, 42, http_client=client)
+        # One page came back short, so no second request was made.
+        assert len(seen) == 1
+        assert truncated is False
+
+
+class TestFetchMaintainerActivity:
+    def test_newest_maintainer_reaction_across_comments_and_reviews(self) -> None:
+        handler, _ = _rest_router(
+            comments=[_comment("phdargen", "MEMBER", "2026-05-05T10:00:00Z")],
+            reviews=[_review("CarsonRoscoe", "COLLABORATOR", "2026-05-07T09:00:00Z")],
+        )
+        with _client(handler) as client:
+            last, responders = fetch_maintainer_activity(
+                REPO, 42, "shuhei0866", http_client=client
+            )
+        assert last == datetime(2026, 5, 7, 9, 0, tzinfo=timezone.utc)
+        assert responders == ["CarsonRoscoe", "phdargen"]
+
+    def test_outside_contributors_do_not_count(self) -> None:
+        handler, _ = _rest_router(
+            comments=[
+                _comment("randomdev", "CONTRIBUTOR", "2026-05-05T10:00:00Z"),
+                _comment("newcomer", "NONE", "2026-05-06T10:00:00Z"),
+            ]
+        )
+        with _client(handler) as client:
+            last, responders = fetch_maintainer_activity(
+                REPO, 42, "shuhei0866", http_client=client
+            )
+        assert last is None
+        assert responders == []
+
+    def test_the_pr_author_never_counts_even_when_a_maintainer(self) -> None:
+        # A maintainer talking under their own PR is not the project
+        # answering a contributor — counting it would hide exactly the
+        # PRs nobody has looked at.
+        handler, _ = _rest_router(
+            comments=[_comment("phdargen", "MEMBER", "2026-05-05T10:00:00Z")]
+        )
+        with _client(handler) as client:
+            last, _ = fetch_maintainer_activity(REPO, 42, "phdargen", http_client=client)
+        assert last is None
+
+    def test_bots_do_not_count(self) -> None:
+        handler, _ = _rest_router(
+            comments=[
+                _comment(
+                    "github-actions[bot]",
+                    "COLLABORATOR",
+                    "2026-05-05T10:00:00Z",
+                    user_type="Bot",
+                )
+            ]
+        )
+        with _client(handler) as client:
+            last, _ = fetch_maintainer_activity(REPO, 42, "shuhei0866", http_client=client)
+        assert last is None
+
+    def test_a_pending_review_is_not_a_reaction(self) -> None:
+        # No `submitted_at` means the review is still a draft, invisible
+        # to the contributor.
+        handler, _ = _rest_router(reviews=[_review("phdargen", "MEMBER", None)])
+        with _client(handler) as client:
+            last, _ = fetch_maintainer_activity(REPO, 42, "shuhei0866", http_client=client)
+        assert last is None
+
+    def test_no_reaction_yet_is_a_value_not_an_error(self) -> None:
+        handler, _ = _rest_router()
+        with _client(handler) as client:
+            assert fetch_maintainer_activity(REPO, 42, "shuhei0866", http_client=client) == (
+                None,
+                [],
+            )
+
+
+class TestEnrichPrs:
+    def test_fills_paths_and_activity_on_an_open_pr(self) -> None:
+        handler, seen = _rest_router(
+            files=[{"filename": "python/x402/settle.py"}],
+            comments=[_comment("phdargen", "MEMBER", "2026-05-05T10:00:00Z")],
+        )
+        prs = [_pr_record(1, status="open")]
+        with _client(handler) as client:
+            assert enrich_prs(prs, http_client=client) == 1
+
+        assert prs[0].changed_paths == ["python/x402/settle.py"]
+        assert prs[0].last_maintainer_activity_at == datetime(
+            2026, 5, 5, 10, 0, tzinfo=timezone.utc
+        )
+        assert prs[0].maintainer_responders == ["phdargen"]
+        assert len(seen) == 3  # files + comments + reviews
+
+    def test_merged_rows_only_pay_for_the_file_list(self) -> None:
+        # A merged PR cannot be stalled, so the two timeline calls buy
+        # nothing; the parity view still needs its paths.
+        handler, seen = _rest_router(files=[{"filename": "go/pkg/x.go"}])
+        prs = [_pr_record(1, status="merged")]
+        with _client(handler) as client:
+            enrich_prs(prs, http_client=client)
+
+        assert prs[0].changed_paths == ["go/pkg/x.go"]
+        assert prs[0].last_maintainer_activity_at is None
+        assert len(seen) == 1
+
+    def test_a_refusal_stops_the_pass_without_failing_the_run(self) -> None:
+        # Losing a whole week's search result to a rate limit would cost
+        # far more than an enrichment the survey can report as partial.
+        handler, _ = _rest_router(status=403)
+        prs = [_pr_record(1), _pr_record(2)]
+        with _client(handler) as client:
+            assert enrich_prs(prs, http_client=client) == 0
+        assert all(not pr.changed_paths for pr in prs)
+
+    def test_empty_input_makes_no_calls(self) -> None:
+        handler, seen = _rest_router()
+        with _client(handler) as client:
+            assert enrich_prs([], http_client=client) == 0
+        assert seen == []
 
 
 class TestDocId:

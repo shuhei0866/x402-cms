@@ -10,6 +10,13 @@ state at index time.
 path, which today only cares about merged rows. It is a subset of
 `PRRecord` fields, so deserialising a merged PR document through
 either class succeeds.
+
+Two `PRRecord` fields exist only to feed the survey's scouting views
+(`changed_paths` for the cross-SDK parity gap, `last_maintainer_activity_at`
+for the stalled-PR list). The Search API does not carry either, so the
+indexer fills them from a second pass over the per-PR REST endpoints;
+both default to "unknown" so a row indexed before that pass — or one
+whose enrichment the rate limiter cut short — still validates.
 """
 
 from __future__ import annotations
@@ -45,6 +52,23 @@ class PRRecord(BaseModel):
     created_at: datetime | None = None
     comments: int = 0
     labels: list[str] = Field(default_factory=list)
+
+    # --- enrichment pass (see module docstring) ---
+    changed_paths: list[str] = Field(default_factory=list)
+    """File paths the PR touches. Empty means "not indexed", not "none"."""
+
+    paths_truncated: bool = False
+    """True when the files endpoint was cut off at the page cap, so
+    `changed_paths` is a prefix of the real list and an SDK the PR
+    touches may be missing from it."""
+
+    last_maintainer_activity_at: datetime | None = None
+    """Newest review or comment from someone with write access to the
+    repo, excluding the PR's own author and bots. `None` means no
+    maintainer has reacted yet (or the row predates enrichment)."""
+
+    maintainer_responders: list[str] = Field(default_factory=list)
+    """Logins behind `last_maintainer_activity_at`, sorted."""
 
 
 class MergedPR(BaseModel):
