@@ -6,6 +6,7 @@ Split out of the original `x_indexer.py` for clarity. Sub-modules:
 - `loader`        `tracked_handles.yaml` flat / clusters parser
 - `writer`        `x_posts` Firestore upserter
 - `orchestrator`  per-week `resolve → fetch → write` composer
+- `usage`         per-run X API consumption counter
 - `__main__`      CLI entrypoint (`python -m code.indexers.x_indexer`)
 
 Importers should pin to the names re-exported here, not to the
@@ -22,11 +23,13 @@ from code.indexers.x_indexer.loader import (
     load_tracked_handles,
 )
 from code.indexers.x_indexer.orchestrator import run_for_week
+from code.indexers.x_indexer.usage import XApiUsage
 from code.indexers.x_indexer.writer import X_COLLECTION, write_to_firestore
 
 __all__ = [
     "HandleNotFoundError",
     "X_COLLECTION",
+    "XApiUsage",
     "fetch_user_tweets",
     "load_handle_clusters",
     "load_tracked_handles",

@@ -317,11 +317,12 @@ code/
 │   │                         response
 │   ├── github_issue_indexer.py  active-issue indexer (issues collection)
 │   ├── x_text_parser.py      parse_pr_references
-│   └── x_indexer/            (5-file package)
+│   └── x_indexer/            (6-file package)
 │       ├── _http.py          API client + tweet → XPost normaliser
 │       ├── loader.py         tracked_handles.yaml (flat or clusters)
 │       ├── writer.py         x_posts upserter
 │       ├── orchestrator.py   per-week resolve → fetch → write
+│       ├── usage.py          per-run X API call / tweet / rate-limit tally
 │       └── __main__.py       CLI
 ├── renderers/
 │   └── digest/

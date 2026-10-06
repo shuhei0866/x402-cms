@@ -19,6 +19,7 @@ from code.indexers.x_indexer._http import (
     fetch_user_tweets,
     resolve_handle_to_id,
 )
+from code.indexers.x_indexer.usage import XApiUsage
 from code.indexers.x_indexer.writer import write_to_firestore
 from code.schemas.x_post import XPost
 from code.utils.dates import parse_iso_week
@@ -33,6 +34,7 @@ def run_for_week(
     fs_client: firestore.Client | None = None,
     project: str | None = None,
     dry_run: bool = False,
+    usage: XApiUsage | None = None,
 ) -> dict[str, Any]:
     """Resolve handles, fetch the week's tweets, optionally write.
 
@@ -41,7 +43,13 @@ def run_for_week(
     bucketing. A `HandleNotFoundError` on any handle does not abort
     the run — the orchestrator records it and continues, so a typo'd
     handle does not erase the rest of the week's signal.
+
+    X API consumption is tallied into `usage` and reported under
+    `api_usage`. Callers that need the tally even when the run raises
+    (e.g. a 429 mid-run) pass their own `XApiUsage` and read it after.
     """
+    if usage is None:
+        usage = XApiUsage()
     start_date, end_date = parse_iso_week(week)
     start_dt = datetime(start_date.year, start_date.month, start_date.day, tzinfo=timezone.utc)
     end_dt = datetime(end_date.year, end_date.month, end_date.day, tzinfo=timezone.utc)
@@ -52,7 +60,7 @@ def run_for_week(
 
     for handle in handles:
         try:
-            user_id = resolve_handle_to_id(handle, client=client, bearer=bearer)
+            user_id = resolve_handle_to_id(handle, client=client, bearer=bearer, usage=usage)
             posts = fetch_user_tweets(
                 user_id=user_id,
                 handle=handle,
@@ -60,6 +68,7 @@ def run_for_week(
                 end=end_dt,
                 client=client,
                 bearer=bearer,
+                usage=usage,
             )
         except HandleNotFoundError:
             failed_handles.append(handle)
@@ -80,6 +89,7 @@ def run_for_week(
         "failed_handles": failed_handles,
         "posts_fetched": len(all_posts),
         "posts_written": posts_written,
+        "api_usage": usage.as_dict(),
     }
     if dry_run:
         # Mirror github_indexer's dry-run: surface the actual rows so

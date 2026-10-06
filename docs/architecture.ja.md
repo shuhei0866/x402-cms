@@ -310,11 +310,12 @@ code/
 │   │                         補完する
 │   ├── github_issue_indexer.py  活発 issue の indexer (issues collection)
 │   ├── x_text_parser.py      parse_pr_references
-│   └── x_indexer/            (5 ファイル package)
+│   └── x_indexer/            (6 ファイル package)
 │       ├── _http.py          API client + tweet → XPost 正規化
 │       ├── loader.py         tracked_handles.yaml (flat / clusters 両対応)
 │       ├── writer.py         x_posts upserter
 │       ├── orchestrator.py   週単位の resolve → fetch → write
+│       ├── usage.py          実行ごとの X API 呼び出し数・取得 tweet 数・rate limit 集計
 │       └── __main__.py       CLI
 ├── renderers/
 │   └── digest/

@@ -10,6 +10,10 @@ Two narrow callables over `httpx`:
 `_to_xpost` lives here, not in the schema module: expanding
 `entities.urls` is API-specific knowledge that the schema should not
 need to carry.
+
+Both callables take an optional `usage` counter; when given, every
+response is recorded into it (before any status check, so failed
+calls are counted too).
 """
 
 from __future__ import annotations
@@ -20,6 +24,11 @@ from typing import Any
 
 import httpx
 
+from code.indexers.x_indexer.usage import (
+    ENDPOINT_USER_LOOKUP,
+    ENDPOINT_USER_TWEETS,
+    XApiUsage,
+)
 from code.indexers.x_text_parser import parse_pr_references
 from code.schemas.x_post import XPost, XPostMetrics
 from code.utils.dates import week_of
@@ -49,7 +58,13 @@ def _iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def resolve_handle_to_id(handle: str, *, client: httpx.Client, bearer: str) -> str:
+def resolve_handle_to_id(
+    handle: str,
+    *,
+    client: httpx.Client,
+    bearer: str,
+    usage: XApiUsage | None = None,
+) -> str:
     """Return the numeric X user id for a handle (no `@` prefix required).
 
     Single round-trip to `GET /2/users/by/username/{handle}`. The
@@ -67,6 +82,8 @@ def resolve_handle_to_id(handle: str, *, client: httpx.Client, bearer: str) -> s
         f"{X_API_BASE}/2/users/by/username/{name}",
         headers={"Authorization": f"Bearer {bearer}"},
     )
+    if usage is not None:
+        usage.record_response(ENDPOINT_USER_LOOKUP, response)
     if response.status_code == 404:
         raise HandleNotFoundError(name)
     response.raise_for_status()
@@ -147,6 +164,7 @@ def fetch_user_tweets(
     *,
     client: httpx.Client,
     bearer: str,
+    usage: XApiUsage | None = None,
 ) -> list[XPost]:
     """Fetch tweets in `[start, end)` for one user, paginated to the end.
 
@@ -173,13 +191,20 @@ def fetch_user_tweets(
             params=params,
             headers={"Authorization": f"Bearer {bearer}"},
         )
+        if usage is not None:
+            usage.record_response(ENDPOINT_USER_TWEETS, response)
         response.raise_for_status()
         payload = response.json()
 
-        for raw in payload.get("data") or []:
+        rows = payload.get("data") or []
+        for raw in rows:
             posts.append(_to_xpost(raw, user_id=user_id, handle=handle_norm))
 
         meta = payload.get("meta") or {}
+        if usage is not None:
+            # `result_count` is what X bills against; fall back to the
+            # row count if a page ever arrives without `meta`.
+            usage.record_tweets(int(meta.get("result_count", len(rows))))
         pagination_token = meta.get("next_token")
         if not pagination_token:
             break
