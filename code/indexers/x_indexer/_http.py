@@ -12,8 +12,8 @@ Two narrow callables over `httpx`:
 need to carry.
 
 Both callables take an optional `usage` counter; when given, every
-response is recorded into it (before any status check, so failed
-calls are counted too).
+attempt is recorded into it through `_get`, including attempts that
+fail in transport or come back with an error status.
 """
 
 from __future__ import annotations
@@ -58,6 +58,27 @@ def _iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _get(
+    client: httpx.Client,
+    url: str,
+    *,
+    endpoint: str,
+    usage: XApiUsage | None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """`client.get` with the attempt and response tallied into `usage`."""
+    if usage is None:
+        return client.get(url, **kwargs)
+    usage.record_attempt(endpoint)
+    try:
+        response = client.get(url, **kwargs)
+    except Exception:
+        usage.record_no_response(endpoint)
+        raise
+    usage.record_response(endpoint, response)
+    return response
+
+
 def resolve_handle_to_id(
     handle: str,
     *,
@@ -78,12 +99,13 @@ def resolve_handle_to_id(
     orchestrator does not need to know which form the API used.
     """
     name = _normalise_handle(handle)
-    response = client.get(
+    response = _get(
+        client,
         f"{X_API_BASE}/2/users/by/username/{name}",
+        endpoint=ENDPOINT_USER_LOOKUP,
+        usage=usage,
         headers={"Authorization": f"Bearer {bearer}"},
     )
-    if usage is not None:
-        usage.record_response(ENDPOINT_USER_LOOKUP, response)
     if response.status_code == 404:
         raise HandleNotFoundError(name)
     response.raise_for_status()
@@ -186,13 +208,14 @@ def fetch_user_tweets(
         if pagination_token:
             params["pagination_token"] = pagination_token
 
-        response = client.get(
+        response = _get(
+            client,
             f"{X_API_BASE}/2/users/{user_id}/tweets",
+            endpoint=ENDPOINT_USER_TWEETS,
+            usage=usage,
             params=params,
             headers={"Authorization": f"Bearer {bearer}"},
         )
-        if usage is not None:
-            usage.record_response(ENDPOINT_USER_TWEETS, response)
         response.raise_for_status()
         payload = response.json()
 
@@ -202,9 +225,9 @@ def fetch_user_tweets(
 
         meta = payload.get("meta") or {}
         if usage is not None:
-            # `result_count` is what X bills against; fall back to the
-            # row count if a page ever arrives without `meta`.
-            usage.record_tweets(int(meta.get("result_count", len(rows))))
+            # `result_count` is what X bills against; the row count
+            # stands in when a page arrives without it.
+            usage.record_tweets(meta.get("result_count"), fallback=len(rows))
         pagination_token = meta.get("next_token")
         if not pagination_token:
             break
