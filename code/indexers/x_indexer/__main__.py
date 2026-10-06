@@ -5,6 +5,11 @@ week resolved by `resolve_target_week` (explicit `--week` > `--current`
 in-progress week > previous ISO week), and prints the summary JSON to
 stdout. `--dry-run` mirrors the github indexer: fetch + report, no
 Firestore write.
+
+Every run ends with a one-line X API usage summary on stderr (calls,
+tweets read, latest rate-limit headers), printed even when the run
+fails mid-way so a 429 still shows how much budget it burned. The
+same figures ride in the stdout JSON under `api_usage`.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import httpx
 
 from code.indexers.x_indexer.loader import load_tracked_handles
 from code.indexers.x_indexer.orchestrator import run_for_week
+from code.indexers.x_indexer.usage import XApiUsage
 from code.utils.dates import resolve_target_week
 
 
@@ -79,15 +85,20 @@ def main() -> int:
         file=sys.stderr,
     )
 
-    with httpx.Client(timeout=30.0) as client:
-        result = run_for_week(
-            week=week,
-            handles=handles,
-            bearer=bearer,
-            client=client,
-            project=project,
-            dry_run=args.dry_run,
-        )
+    usage = XApiUsage()
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            result = run_for_week(
+                week=week,
+                handles=handles,
+                bearer=bearer,
+                client=client,
+                project=project,
+                dry_run=args.dry_run,
+                usage=usage,
+            )
+    finally:
+        print(usage.summary_line(), file=sys.stderr)
 
     print(json.dumps(result, indent=2))
     return 0

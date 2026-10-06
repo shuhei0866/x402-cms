@@ -10,6 +10,10 @@ Two narrow callables over `httpx`:
 `_to_xpost` lives here, not in the schema module: expanding
 `entities.urls` is API-specific knowledge that the schema should not
 need to carry.
+
+Both callables take an optional `usage` counter; when given, every
+attempt is recorded into it through `_get`, including attempts that
+fail in transport or come back with an error status.
 """
 
 from __future__ import annotations
@@ -20,6 +24,11 @@ from typing import Any
 
 import httpx
 
+from code.indexers.x_indexer.usage import (
+    ENDPOINT_USER_LOOKUP,
+    ENDPOINT_USER_TWEETS,
+    XApiUsage,
+)
 from code.indexers.x_text_parser import parse_pr_references
 from code.schemas.x_post import XPost, XPostMetrics
 from code.utils.dates import week_of
@@ -49,7 +58,34 @@ def _iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def resolve_handle_to_id(handle: str, *, client: httpx.Client, bearer: str) -> str:
+def _get(
+    client: httpx.Client,
+    url: str,
+    *,
+    endpoint: str,
+    usage: XApiUsage | None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """`client.get` with the attempt and response tallied into `usage`."""
+    if usage is None:
+        return client.get(url, **kwargs)
+    usage.record_attempt(endpoint)
+    try:
+        response = client.get(url, **kwargs)
+    except Exception:
+        usage.record_no_response(endpoint)
+        raise
+    usage.record_response(endpoint, response)
+    return response
+
+
+def resolve_handle_to_id(
+    handle: str,
+    *,
+    client: httpx.Client,
+    bearer: str,
+    usage: XApiUsage | None = None,
+) -> str:
     """Return the numeric X user id for a handle (no `@` prefix required).
 
     Single round-trip to `GET /2/users/by/username/{handle}`. The
@@ -63,8 +99,11 @@ def resolve_handle_to_id(handle: str, *, client: httpx.Client, bearer: str) -> s
     orchestrator does not need to know which form the API used.
     """
     name = _normalise_handle(handle)
-    response = client.get(
+    response = _get(
+        client,
         f"{X_API_BASE}/2/users/by/username/{name}",
+        endpoint=ENDPOINT_USER_LOOKUP,
+        usage=usage,
         headers={"Authorization": f"Bearer {bearer}"},
     )
     if response.status_code == 404:
@@ -147,6 +186,7 @@ def fetch_user_tweets(
     *,
     client: httpx.Client,
     bearer: str,
+    usage: XApiUsage | None = None,
 ) -> list[XPost]:
     """Fetch tweets in `[start, end)` for one user, paginated to the end.
 
@@ -168,18 +208,26 @@ def fetch_user_tweets(
         if pagination_token:
             params["pagination_token"] = pagination_token
 
-        response = client.get(
+        response = _get(
+            client,
             f"{X_API_BASE}/2/users/{user_id}/tweets",
+            endpoint=ENDPOINT_USER_TWEETS,
+            usage=usage,
             params=params,
             headers={"Authorization": f"Bearer {bearer}"},
         )
         response.raise_for_status()
         payload = response.json()
 
-        for raw in payload.get("data") or []:
+        rows = payload.get("data") or []
+        for raw in rows:
             posts.append(_to_xpost(raw, user_id=user_id, handle=handle_norm))
 
         meta = payload.get("meta") or {}
+        if usage is not None:
+            # `result_count` is what X bills against; the row count
+            # stands in when a page arrives without it.
+            usage.record_tweets(meta.get("result_count"), fallback=len(rows))
         pagination_token = meta.get("next_token")
         if not pagination_token:
             break
