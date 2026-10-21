@@ -1,5 +1,11 @@
 # x402-cms Architecture
 
+> **Public deployment retired on 2026-10-22.** The hosted service and scheduled
+> collection have been shut down and removed. This repository remains available
+> as a reference implementation; the architecture below describes the former
+> deployment. Published articles, collected data and editorial configuration
+> have been preserved privately. No public endpoint is currently operated.
+
 `x402-cms` is a reference implementation of an **Agent-oriented CMS**.
 The same URL serves two different renderings based on the requester:
 a free HTML page for humans (browsers), and a paid JSON response for
