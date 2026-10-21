@@ -9,6 +9,7 @@ authors = [{ name = "shuhei0866" }]
 keywords = ["x402", "cms", "agent", "payment", "402", "agentic-commerce"]
 
 dependencies = [
+    "certifi>=2026.10.19",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "x402[fastapi,httpx,evm]>=2.9.0",
