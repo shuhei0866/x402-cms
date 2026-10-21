@@ -1,5 +1,11 @@
 # x402-cms
 
+> **Public deployment retired on 2026-10-22.** The hosted service and scheduled
+> collection have been shut down and removed. This repository remains available
+> as a reference implementation; the architecture below describes the former
+> deployment. Published articles, collected data and editorial configuration
+> have been preserved privately. No public endpoint is currently operated.
+
 x402-paid CMS — agent-oriented content delivery with HTTP 402 micropayments. **Free for humans, paid for agents.**
 
 [日本語版](README.ja.md)
