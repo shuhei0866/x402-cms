@@ -9,9 +9,15 @@
 
 FROM python:3.11-slim
 
-COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
+# Keep OS, pip and uv trust stores patched before resolving dependencies.
+RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir --cert /etc/ssl/certs/ca-certificates.crt --upgrade pip==26.2.2
 
-ENV PYTHONUNBUFFERED=1 \
+COPY --from=ghcr.io/astral-sh/uv:0.13.4 /uv /uvx /bin/
+
+ENV GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
